@@ -1,0 +1,20 @@
+{
+  "name": "OXFORD Bo'zqal'a — Moliyaviy hisob",
+  "short_name": "OXFORD",
+  "description": "Kunlik kirim-chiqim, hisobotlar va analitika",
+  "start_url": "index.php",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "lang": "uz",
+  "icons": [
+    {
+      "src": "logo.png",
+      "sizes": "556x496",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
