@@ -1,314 +1,297 @@
 <?php
-session_start();
-include 'db.php';
-if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') { header("Location: index.php"); exit(); }
+require_once 'db.php';
+require_once 'layout.php';
+require_once 'report_lib.php';
+require_admin();
 
-date_default_timezone_set('Asia/Tashkent');
-$start_date = $_GET['start'] ?? date('Y-m-01');
-$end_date = $_GET['end'] ?? date('Y-m-t');
+$f = rl_filters();
+$cur = rl_totals($conn, $f);
+[$ps, $pe, $days] = rl_prev_range($f);
+$prev = rl_totals($conn, $f, $ps, $pe);
+$daily = rl_daily($conn, $f);
+$in = $cur['in']; $out = $cur['out']; $net = $cur['net'];
+$active_days = max(1, count($daily));
+$margin = $in > 0 ? $net / $in * 100 : 0;
+$pmargin = $prev['in'] > 0 ? $prev['net'] / $prev['in'] * 100 : 0;
 
-// --- HELPER FUNCTIONS ---
-function getExpenseByCat($conn, $methodCol, $start, $end) {
-    $sql = "SELECT c.name, SUM(t.payment) as total 
-            FROM transactions t 
-            JOIN categories c ON t.category_id = c.id 
-            WHERE t.cash_out = 1 AND t.$methodCol = 1 AND t.date BETWEEN ? AND ? 
-            GROUP BY c.name";
-    $stmt = $conn->prepare($sql);
-    $stmt->execute([$start, $end]);
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
+// peak day
+$peak = null; foreach ($daily as $d) { if (!$peak || $d['inc'] > $peak['inc']) $peak = $d; }
 
-function getIncomeByCat($conn, $start, $end) {
-    $sql = "SELECT c.name, SUM(t.payment) as total 
-            FROM transactions t 
-            JOIN categories c ON t.category_id = c.id 
-            WHERE t.cash_in = 1 AND t.date BETWEEN ? AND ? 
-            GROUP BY c.name";
-    $stmt = $conn->prepare($sql);
-    $stmt->execute([$start, $end]);
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
+// weekday averages (per calendar occurrence of that weekday in the range)
+$wd_in = array_fill(0, 7, 0.0); $wd_out = array_fill(0, 7, 0.0); $wd_n = array_fill(0, 7, 0);
+foreach ($daily as $d) { $w = (int)date('w', strtotime($d['date'])); $wd_in[$w] += $d['inc']; $wd_out[$w] += $d['exp']; }
+for ($t = strtotime($f['start']), $e = strtotime($f['end']); $t <= $e; $t += 86400) { $wd_n[(int)date('w', $t)]++; }
+$order = [1, 2, 3, 4, 5, 6, 0]; $wd_labels = []; $wd_avg_in = []; $wd_avg_out = [];
+foreach ($order as $w) { $wd_labels[] = ['Yak','Dush','Sesh','Chor','Pay','Juma','Shan'][$w]; $n = max(1, $wd_n[$w]); $wd_avg_in[] = round($wd_in[$w] / $n); $wd_avg_out[] = round($wd_out[$w] / $n); }
 
-// 1. DATA FOR PIES
-$naqd_expenses = getExpenseByCat($conn, 'cash', $start_date, $end_date);
-$click_expenses = getExpenseByCat($conn, 'click', $start_date, $end_date);
-$bank_expenses = getExpenseByCat($conn, 'bank', $start_date, $end_date);
-$income_cats = getIncomeByCat($conn, $start_date, $end_date);
+// expense by category x method (top 8 + rest)
+[$w, $p] = rl_where($f);
+$st = $conn->prepare("SELECT COALESCE(c.name,'Kategoriyasiz') AS name, " . RL_METHOD_SQL . " AS m, SUM(t.payment) AS s FROM transactions t LEFT JOIN categories c ON t.category_id=c.id WHERE $w AND t.cash_in<>1 GROUP BY COALESCE(c.name,'Kategoriyasiz'), m");
+$st->execute($p);
+$xc = [];
+foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $xc[$r['name']][$r['m']] = ($xc[$r['name']][$r['m']] ?? 0) + (float)$r['s']; }
+uasort($xc, fn($a, $b) => array_sum($b) <=> array_sum($a));
+$rest = array_slice($xc, 8, null, true); $xc = array_slice($xc, 0, 8, true);
+if ($rest) { $o = ['cash' => 0, 'click' => 0, 'bank' => 0]; foreach ($rest as $v) foreach ($v as $m => $s) $o[$m] += $s; $xc['Boshqa (' . count($rest) . ' ta)'] = $o; }
+$xc_labels = array_keys($xc);
+$xc_series = []; foreach (['cash', 'click', 'bank'] as $m) { $xc_series[$m] = array_map(fn($v) => round($v[$m] ?? 0), array_values($xc)); }
 
-// 2. TREND DATA
-$trend_sql = "SELECT date, 
-    SUM(CASE WHEN cash_in=1 THEN payment ELSE 0 END) as inc,
-    SUM(CASE WHEN cash_out=1 THEN payment ELSE 0 END) as exp
-    FROM transactions WHERE date BETWEEN ? AND ? GROUP BY date ORDER BY date";
-$stmt = $conn->prepare($trend_sql);
-$stmt->execute([$start_date, $end_date]);
-$trend_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$cat_in = rl_by_category($conn, $f, 'in');
 
-$dates = []; $daily_inc = []; $daily_exp = [];
-foreach($trend_data as $d) {
-    $dates[] = $d['date'];
-    $daily_inc[] = $d['inc'];
-    $daily_exp[] = $d['exp'];
-}
+// staff performance
+$st = $conn->prepare("SELECT u.username, SUM(CASE WHEN t.cash_in=1 THEN t.payment ELSE 0 END) AS inc, SUM(CASE WHEN t.cash_in<>1 THEN t.payment ELSE 0 END) AS exp, COUNT(*) AS n, MAX(t.date) AS last_date FROM transactions t JOIN users u ON t.user_id=u.id WHERE $w GROUP BY u.id ORDER BY inc DESC");
+$st->execute($p); $staff = $st->fetchAll(PDO::FETCH_ASSOC);
+$staff_max = max(array_merge([1], array_column($staff, 'inc')));
 
-// 3. STAFF PERFORMANCE (New Feature)
-// Who collected the most money?
-$staff_sql = "SELECT u.username, SUM(t.payment) as total, COUNT(t.id) as count 
-              FROM transactions t 
-              JOIN users u ON t.user_id = u.id 
-              WHERE t.cash_in = 1 AND t.date BETWEEN ? AND ? 
-              GROUP BY u.username ORDER BY total DESC";
-$staff_stmt = $conn->prepare($staff_sql);
-$staff_stmt->execute([$start_date, $end_date]);
-$staff_stats = $staff_stmt->fetchAll(PDO::FETCH_ASSOC);
+// largest transactions
+$top = function (bool $income) use ($conn, $w, $p) {
+    $st = $conn->prepare("SELECT t.date, t.payment, t.comment, " . RL_METHOD_SQL . " AS m, COALESCE(c.name,'Kategoriyasiz') AS cat FROM transactions t LEFT JOIN categories c ON t.category_id=c.id WHERE $w AND t.cash_in" . ($income ? '=1' : '<>1') . " ORDER BY t.payment DESC LIMIT 5");
+    $st->execute($p); return $st->fetchAll(PDO::FETCH_ASSOC);
+};
+$top_in = $top(true); $top_out = $top(false);
 
-// 4. KPI STATS
-$sum_sql = "SELECT 
-    SUM(CASE WHEN cash_in=1 THEN payment ELSE 0 END) as total_in,
-    SUM(CASE WHEN cash_out=1 THEN payment ELSE 0 END) as total_out,
-    COUNT(DISTINCT date) as days_count
-    FROM transactions WHERE date BETWEEN ? AND ?";
-$stmt = $conn->prepare($sum_sql); $stmt->execute([$start_date, $end_date]);
-$sums = $stmt->fetch(PDO::FETCH_ASSOC);
+// chart payload
+$labels = array_map(fn($d) => date('d.m', strtotime($d['date'])), $daily);
+$dinc = array_map(fn($d) => (float)$d['inc'], $daily);
+$dexp = array_map(fn($d) => (float)$d['exp'], $daily);
+$cum = []; $run = 0; foreach ($daily as $d) { $run += $d['inc'] - $d['exp']; $cum[] = $run; }
+$payload = ['labels' => $labels, 'inc' => $dinc, 'exp' => $dexp, 'cum' => $cum,
+    'wd' => ['labels' => $wd_labels, 'inc' => $wd_avg_in, 'exp' => $wd_avg_out],
+    'xc' => ['labels' => $xc_labels, 'series' => $xc_series]];
 
-$total_in = $sums['total_in'] ?: 0;
-$total_out = $sums['total_out'] ?: 0;
-$days = $sums['days_count'] ?: 1;
-$margin = ($total_in > 0) ? (($total_in - $total_out) / $total_in) * 100 : 0;
-$avg_daily_in = $total_in / $days;
+$qs = rl_qs($f);
+$range_label = $f['start'] === $f['end'] ? uz_date($f['start']) : uz_date($f['start']) . ' — ' . uz_date($f['end']);
+$head = '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>';
 
-// 5. PAYMENT METHOD PREFERENCE
-$method_sql = "SELECT 
-    SUM(CASE WHEN cash=1 THEN payment ELSE 0 END) as cash_total,
-    SUM(CASE WHEN click=1 THEN payment ELSE 0 END) as click_total,
-    SUM(CASE WHEN bank=1 THEN payment ELSE 0 END) as bank_total
-    FROM transactions WHERE cash_in=1 AND date BETWEEN ? AND ?";
-$stmt = $conn->prepare($method_sql); $stmt->execute([$start_date, $end_date]);
-$methods = $stmt->fetch(PDO::FETCH_ASSOC);
-
+ui_head('Analitika', ['head' => $head]);
+ui_start('analytics');
 ?>
-<!DOCTYPE html>
-<html lang="uz">
-<head>
-    <meta charset="UTF-8">
-    <title>Analitika — OXFORD</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #fafafa; }
-        @media print {
-            .no-print { display: none !important; }
-            body { background-color: white; }
-            .shadow-sm, .shadow-md, .shadow-xl { box-shadow: none !important; border: 1px solid #eee; }
-        }
-    </style>
-</head>
-<body class="text-zinc-800 pb-20">
-
-    <nav class="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-zinc-200/60 no-print">
-        <div class="max-w-7xl mx-auto px-6 h-16 flex justify-between items-center">
-            <h1 class="font-bold text-lg text-zinc-900">Batafsil Analitika — OXFORD</h1>
-            <div class="flex gap-4">
-                <button onclick="window.print()" class="flex items-center gap-2 text-sm font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-xl hover:bg-indigo-100 transition">
-                    <i data-lucide="printer" class="w-4 h-4"></i> Chop etish
-                </button>
-                <a href="hisobot.php" class="text-sm font-semibold text-zinc-500 hover:text-zinc-900 flex items-center gap-2 transition-colors">
-                    <i data-lucide="arrow-left" class="w-4 h-4"></i> Orqaga
-                </a>
-            </div>
-        </div>
-    </nav>
-
-    <div class="max-w-7xl mx-auto px-6 py-8 space-y-8">
-
-        <!-- STATS PAGE SUB-NAV -->
-        <div class="flex gap-2 bg-white rounded-2xl p-1.5 shadow-sm border border-zinc-100 w-fit">
-            <a href="hisobot.php" class="px-5 py-2 rounded-xl text-sm font-bold text-zinc-500 hover:bg-zinc-50 hover:text-zinc-800 transition flex items-center gap-1.5">
-                <i data-lucide="file-bar-chart" class="w-3.5 h-3.5"></i> Hisobot
-            </a>
-            <span class="px-5 py-2 rounded-xl text-sm font-bold bg-indigo-600 text-white shadow flex items-center gap-1.5">
-                <i data-lucide="line-chart" class="w-3.5 h-3.5"></i> Grafik Analitika
-            </span>
-        </div>
-
-        <div class="bg-white p-4 rounded-2xl shadow-sm border border-zinc-100 flex justify-between items-center no-print">
-            <h2 class="font-bold text-zinc-700">Davrni tanlang</h2>
-            <form class="flex gap-2 items-center">
-                <input type="date" name="start" value="<?= $start_date ?>" class="bg-zinc-50 border border-zinc-200 rounded-xl p-2 text-sm font-bold text-zinc-600 outline-none">
-                <span class="text-zinc-300">-</span>
-                <input type="date" name="end" value="<?= $end_date ?>" class="bg-zinc-50 border border-zinc-200 rounded-xl p-2 text-sm font-bold text-zinc-600 outline-none">
-                <button class="bg-zinc-900 text-white p-2 rounded-xl shadow hover:bg-zinc-800 transition"><i data-lucide="search" class="w-4 h-4"></i></button>
-            </form>
-        </div>
-
-        <div class="hidden print:block text-center mb-8">
-            <h1 class="text-2xl font-bold">Moliyaviy Hisobot</h1>
-            <p class="text-zinc-500"><?= $start_date ?> dan <?= $end_date ?> gacha</p>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-            <div class="bg-white p-6 rounded-3xl border border-emerald-100 shadow-sm">
-                <div class="flex justify-between items-start mb-2">
-                    <p class="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Foyda Marjasi</p>
-                    <div class="p-2 bg-emerald-50 rounded-lg text-emerald-600"><i data-lucide="percent" class="w-4 h-4"></i></div>
-                </div>
-                <h3 class="text-2xl font-bold text-zinc-800"><?= number_format($margin, 1) ?>%</h3>
-                <p class="text-xs text-zinc-400 mt-1">Sof foyda ulushi</p>
-            </div>
-
-            <div class="bg-white p-6 rounded-3xl border border-indigo-100 shadow-sm">
-                <div class="flex justify-between items-start mb-2">
-                    <p class="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">O'rtacha Kunlik Kirim</p>
-                    <div class="p-2 bg-indigo-50 rounded-lg text-indigo-600"><i data-lucide="calendar" class="w-4 h-4"></i></div>
-                </div>
-                <h3 class="text-2xl font-bold text-zinc-800"><?= number_format($avg_daily_in, 0, '.', ' ') ?></h3>
-            </div>
-
-            <div class="bg-white p-6 rounded-3xl border border-blue-100 shadow-sm col-span-2">
-                <h4 class="text-xs font-bold text-blue-600 uppercase mb-4">To'lov Turlari (Kirim)</h4>
-                <div class="flex items-end gap-4 h-16">
-                    <?php 
-                        $total_m = $methods['cash_total'] + $methods['click_total'] + $methods['bank_total'];
-                        $cash_p = $total_m > 0 ? ($methods['cash_total']/$total_m)*100 : 0;
-                        $click_p = $total_m > 0 ? ($methods['click_total']/$total_m)*100 : 0;
-                        $bank_p = $total_m > 0 ? ($methods['bank_total']/$total_m)*100 : 0;
-                    ?>
-                    <div class="flex-1 flex flex-col justify-end gap-1">
-                        <div class="bg-emerald-400 rounded-t-lg w-full" style="height: <?= max($cash_p, 5) ?>%"></div>
-                        <span class="text-[10px] font-bold text-center">Naqd (<?= round($cash_p) ?>%)</span>
-                    </div>
-                    <div class="flex-1 flex flex-col justify-end gap-1">
-                        <div class="bg-blue-400 rounded-t-lg w-full" style="height: <?= max($click_p, 5) ?>%"></div>
-                        <span class="text-[10px] font-bold text-center">Click (<?= round($click_p) ?>%)</span>
-                    </div>
-                    <div class="flex-1 flex flex-col justify-end gap-1">
-                        <div class="bg-purple-400 rounded-t-lg w-full" style="height: <?= max($bank_p, 5) ?>%"></div>
-                        <span class="text-[10px] font-bold text-center">Bank (<?= round($bank_p) ?>%)</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm break-inside-avoid">
-            <h3 class="font-bold text-zinc-700 mb-6 flex items-center gap-2"><i data-lucide="activity" class="w-5 h-5 text-indigo-500"></i> Kunlik Dinamika (Kirim vs Chiqim)</h3>
-            <div class="h-72 w-full">
-                <canvas id="trendChart"></canvas>
-            </div>
-        </div>
-
-        <div class="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm break-inside-avoid">
-            <h3 class="font-bold text-zinc-700 mb-4 flex items-center gap-2"><i data-lucide="users" class="w-5 h-5 text-indigo-500"></i> Staff Faolligi (Kirim bo'yicha)</h3>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm text-left">
-                    <thead class="bg-zinc-50 text-xs uppercase text-zinc-500 font-bold">
-                        <tr>
-                            <th class="px-4 py-3 rounded-l-xl">Staff</th>
-                            <th class="px-4 py-3">Tranzaksiyalar soni</th>
-                            <th class="px-4 py-3 text-right rounded-r-xl">Jami Kirim Summasi</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-zinc-100">
-                        <?php foreach($staff_stats as $s): ?>
-                        <tr>
-                            <td class="px-4 py-3 font-bold text-zinc-700"><?= $s['username'] ?></td>
-                            <td class="px-4 py-3 text-zinc-500"><?= $s['count'] ?> ta</td>
-                            <td class="px-4 py-3 text-right font-bold text-emerald-600"><?= number_format($s['total'], 0, '.', ' ') ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 break-inside-avoid">
-            
-            <div class="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm flex flex-col">
-                <h3 class="font-bold text-zinc-700 mb-4 text-center">Naqd Xarajatlar</h3>
-                <div class="flex-grow flex items-center justify-center relative h-64">
-                    <?php if(empty($naqd_expenses)): ?>
-                        <p class="text-zinc-400 text-sm">Ma'lumot yo'q</p>
-                    <?php else: ?>
-                        <canvas id="naqdChart"></canvas>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <div class="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm flex flex-col">
-                <h3 class="font-bold text-zinc-700 mb-4 text-center">Click Xarajatlar</h3>
-                <div class="flex-grow flex items-center justify-center relative h-64">
-                    <?php if(empty($click_expenses)): ?>
-                        <p class="text-zinc-400 text-sm">Ma'lumot yo'q</p>
-                    <?php else: ?>
-                        <canvas id="clickChart"></canvas>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <div class="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm flex flex-col">
-                <h3 class="font-bold text-zinc-700 mb-4 text-center">Bank Xarajatlar</h3>
-                <div class="flex-grow flex items-center justify-center relative h-64">
-                    <?php if(empty($bank_expenses)): ?>
-                        <p class="text-zinc-400 text-sm">Ma'lumot yo'q</p>
-                    <?php else: ?>
-                        <canvas id="bankChart"></canvas>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-        </div>
-
-        <div class="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm break-inside-avoid">
-            <h3 class="font-bold text-zinc-700 mb-4 text-center">Kirim Manbalari (Kategoriyalar)</h3>
-            <div class="flex items-center justify-center relative h-72">
-                <?php if(empty($income_cats)): ?>
-                    <p class="text-zinc-400 text-sm">Ma'lumot yo'q</p>
-                <?php else: ?>
-                    <canvas id="incomeChart"></canvas>
-                <?php endif; ?>
-            </div>
-        </div>
-
+<div class="page">
+  <div class="page-head">
+    <div><h1 class="page-title">Grafik analitika</h1><p class="page-sub"><?= e($range_label) ?> · <?= $days ?> kun</p></div>
+    <div class="row gap-2 no-print">
+      <button class="btn" type="button" onclick="window.print()"><?= icon('printer', 'i-sm') ?> <span class="hide-sm">Chop etish</span></button>
+      <a class="btn btn-success" href="export_excel.php?<?= e($qs) ?>"><?= icon('download', 'i-sm') ?> Excel (CSV)</a>
     </div>
+  </div>
+  <div class="no-print" style="margin-bottom:16px"><?php ui_report_subnav('analytics', $qs); ?></div>
+  <?php rl_render_filters($conn, $f, 'analitika.php', [], false); ?>
 
-    <script>
-        lucide.createIcons();
+  <?php if ($cur['n'] === 0): ?>
+  <div class="card empty" style="margin-top:16px"><div class="icon-tile"><?= icon('chart-line', 'i-lg') ?></div><b>Bu davrda ma'lumot yo'q</b><span class="fs-sm">Boshqa davr tanlang.</span></div>
+  <?php else: ?>
 
-        const colors = ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6'];
+  <section class="grid g-2 lg-g-4" style="margin-top:16px" aria-label="Ko'rsatkichlar">
+    <div class="card kpi">
+      <div class="kpi-top"><span class="kpi-label">Foyda marjasi</span><span class="icon-tile in" style="width:32px;height:32px;border-radius:10px"><?= icon('percent', 'i-sm') ?></span></div>
+      <div class="kpi-value num <?= $margin < 0 ? 'text-out' : '' ?>"><?= number_format($margin, 1, ',', '') ?>%</div>
+      <div class="kpi-foot"><?= rl_delta_html(rl_delta($margin, $pmargin, true)) ?><span>oldingi: <?= number_format($pmargin, 1, ',', '') ?>%</span></div>
+    </div>
+    <div class="card kpi">
+      <div class="kpi-top"><span class="kpi-label">O'rtacha kunlik kirim</span><span class="icon-tile primary" style="width:32px;height:32px;border-radius:10px"><?= icon('calendar', 'i-sm') ?></span></div>
+      <div class="kpi-value num"><?= fmt($in / $active_days) ?></div>
+      <div class="kpi-foot"><?= $active_days ?> ta faol kun bo'yicha</div>
+    </div>
+    <div class="card kpi">
+      <div class="kpi-top"><span class="kpi-label">O'rtacha kunlik chiqim</span><span class="icon-tile out" style="width:32px;height:32px;border-radius:10px"><?= icon('trending-down', 'i-sm') ?></span></div>
+      <div class="kpi-value num"><?= fmt($out / $active_days) ?></div>
+      <div class="kpi-foot">Jami chiqim: <?= fmt_short($out) ?></div>
+    </div>
+    <div class="card kpi">
+      <div class="kpi-top"><span class="kpi-label">Eng yaxshi kun</span><span class="icon-tile in" style="width:32px;height:32px;border-radius:10px"><?= icon('trending-up', 'i-sm') ?></span></div>
+      <div class="kpi-value num"><?= $peak ? '+' . fmt($peak['inc']) : '—' ?></div>
+      <div class="kpi-foot"><?= $peak ? e(uz_date($peak['date'], false)) . ', ' . e(uz_weekday($peak['date'])) : '' ?></div>
+    </div>
+  </section>
 
-        // Trend Chart
-        const trendCtx = document.getElementById('trendChart').getContext('2d');
-        new Chart(trendCtx, {
-            type: 'line',
-            data: {
-                labels: <?= json_encode($dates) ?>,
-                datasets: [
-                    { label: 'Kirim', data: <?= json_encode($daily_inc) ?>, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', fill: true, tension: 0.3 },
-                    { label: 'Chiqim', data: <?= json_encode($daily_exp) ?>, borderColor: '#f43f5e', backgroundColor: 'rgba(244, 63, 94, 0.1)', fill: true, tension: 0.3 }
-                ]
-            },
-            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true } } }
-        });
+  <!-- Trend -->
+  <section class="card" style="margin-top:16px" aria-labelledby="trTitle">
+    <div class="card-head" style="flex-wrap:wrap">
+      <h2 class="card-title" id="trTitle"><?= icon('chart-line', 'i-sm') ?> Kunlik dinamika</h2>
+      <div class="seg no-print" role="group" aria-label="Ko'rinish" id="trendMode">
+        <button type="button" class="on" data-mode="daily" aria-pressed="true">Kunlik</button>
+        <button type="button" data-mode="cum" aria-pressed="false">Jamlanma foyda</button>
+      </div>
+    </div>
+    <div class="card-pad">
+      <div class="chart-box tall"><canvas id="trendChart" role="img" aria-label="Kunlik kirim va chiqim grafigi. Ma'lumotlar quyidagi jadvalda."></canvas></div>
+      <details class="data-table mt-3 no-print"><summary><?= icon('list', 'i-sm') ?> Jadval ko'rinishi</summary>
+        <div class="table-scroll" style="margin-top:8px;border:1px solid var(--border);border-radius:12px">
+          <table class="table"><thead><tr><th>Sana</th><th class="r">Kirim</th><th class="r">Chiqim</th><th class="r">Jamlanma</th></tr></thead><tbody>
+          <?php foreach ($daily as $i => $d): ?><tr><td><?= e(date('d.m.Y', strtotime($d['date']))) ?></td><td class="r num"><?= fmt($d['inc']) ?></td><td class="r num"><?= fmt($d['exp']) ?></td><td class="r num"><?= e(fmt_signed($cum[$i])) ?></td></tr><?php endforeach; ?>
+          </tbody></table>
+        </div>
+      </details>
+    </div>
+  </section>
 
-        // Pie Charts
-        function createPie(id, data) {
-            if(!document.getElementById(id)) return;
-            const ctx = document.getElementById(id).getContext('2d');
-            const labels = data.map(i => i.name);
-            const values = data.map(i => i.total);
-            new Chart(ctx, {
-                type: 'doughnut',
-                data: { labels: labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } } }
-            });
-        }
+  <div class="grid lg-g-2" style="margin-top:16px">
+    <!-- Methods split -->
+    <section class="card" aria-labelledby="msTitle">
+      <div class="card-head"><h2 class="card-title" id="msTitle"><?= icon('credit-card', 'i-sm') ?> Kirim: to'lov usullari</h2></div>
+      <div class="card-pad stack">
+        <?php if ($in > 0): ?>
+        <div class="segbar" role="img" aria-label="Kirimning usullar bo'yicha taqsimoti">
+          <?php foreach (['cash', 'click', 'bank'] as $m): if ($cur['m'][$m]['in'] <= 0) continue; ?><i class="<?= $m ?>" style="flex:<?= $cur['m'][$m]['in'] ?>"></i><?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+        <?php foreach (['cash', 'click', 'bank'] as $m): $mm = method_meta($m); $v = $cur['m'][$m]['in']; $pc = $in > 0 ? $v / $in * 100 : 0; ?>
+        <div class="row">
+          <span class="dot dot-<?= $m ?>"></span>
+          <span class="grow fw-6"><?= e($mm['label']) ?></span>
+          <span class="num fw-8"><?= fmt($v) ?></span>
+          <span class="num fs-sm text-3" style="width:44px;text-align:right"><?= round($pc) ?>%</span>
+        </div>
+        <?php endforeach; ?>
+      </div>
+    </section>
 
-        createPie('naqdChart', <?= json_encode($naqd_expenses) ?>);
-        createPie('clickChart', <?= json_encode($click_expenses) ?>);
-        createPie('bankChart', <?= json_encode($bank_expenses) ?>);
-        createPie('incomeChart', <?= json_encode($income_cats) ?>);
-    </script>
-</body>
-</html>
+    <!-- Weekday -->
+    <section class="card" aria-labelledby="wdTitle">
+      <div class="card-head"><h2 class="card-title" id="wdTitle"><?= icon('calendar-days', 'i-sm') ?> Hafta kunlari bo'yicha o'rtacha</h2></div>
+      <div class="card-pad"><div class="chart-box" style="height:230px"><canvas id="wdChart" role="img" aria-label="Hafta kunlari bo'yicha o'rtacha kirim va chiqim"></canvas></div></div>
+    </section>
+  </div>
+
+  <div class="grid lg-g-2" style="margin-top:16px">
+    <!-- Expense by cat x method -->
+    <section class="card" aria-labelledby="xcTitle">
+      <div class="card-head"><h2 class="card-title" id="xcTitle"><?= icon('layers', 'i-sm') ?> Chiqim: kategoriya va usul</h2></div>
+      <div class="card-pad">
+        <?php if ($xc): ?>
+        <div class="chart-box" style="height:<?= 70 + count($xc) * 40 ?>px"><canvas id="xcChart" role="img" aria-label="Chiqim kategoriyalari, to'lov usullari bo'yicha"></canvas></div>
+        <?php else: ?><div class="empty" style="padding:24px"><span class="fs-sm">Chiqim yo'q</span></div><?php endif; ?>
+      </div>
+    </section>
+
+    <!-- Income sources -->
+    <section class="card" aria-labelledby="isTitle">
+      <div class="card-head"><h2 class="card-title" id="isTitle"><?= icon('trending-up', 'i-sm') ?> Kirim manbalari</h2></div>
+      <div class="card-pad rank">
+        <?php foreach ($cat_in as $c): $pc = $in > 0 ? $c['total'] / $in * 100 : 0; ?>
+        <div class="rank-item">
+          <div class="rank-top"><b><?= e($c['name']) ?></b><span class="num text-in"><?= fmt($c['total']) ?></span></div>
+          <div class="bar in"><i style="width:<?= round($pc, 1) ?>%"></i></div>
+          <div class="rank-sub"><span><?= $c['cnt'] ?> ta</span><span class="fw-7 num"><?= number_format($pc, 1, ',', '') ?>%</span></div>
+        </div>
+        <?php endforeach; ?>
+        <?php if (!$cat_in): ?><div class="empty" style="padding:24px"><span class="fs-sm">Kirim yo'q</span></div><?php endif; ?>
+      </div>
+    </section>
+  </div>
+
+  <!-- Staff -->
+  <section class="card clip" style="margin-top:16px" aria-labelledby="stTitle">
+    <div class="card-head"><h2 class="card-title" id="stTitle"><?= icon('users', 'i-sm') ?> Xodimlar faolligi</h2></div>
+    <div class="table-wrap">
+      <table class="table table-stack">
+        <thead><tr><th>Foydalanuvchi</th><th class="r">Tranzaksiya</th><th class="r">Kirim</th><th class="r">Chiqim</th><th>Oxirgi faollik</th><th style="min-width:140px">Ulush</th></tr></thead>
+        <tbody>
+        <?php foreach ($staff as $s): ?>
+          <tr>
+            <td class="cell-title"><span class="row gap-2"><span class="avatar avatar-sm"><?= e(mb_substr($s['username'], 0, 1)) ?></span><b><?= e($s['username']) ?></b></span></td>
+            <td class="r num" data-label="Tranzaksiya"><?= $s['n'] ?> ta</td>
+            <td class="r num fw-7 text-in" data-label="Kirim">+<?= fmt($s['inc']) ?></td>
+            <td class="r num fw-7 text-out" data-label="Chiqim">−<?= fmt($s['exp']) ?></td>
+            <td class="text-2" data-label="Oxirgi"><?= e(date('d.m.Y', strtotime($s['last_date']))) ?></td>
+            <td data-label="Ulush"><div class="bar bar-thin in" style="min-width:110px"><i style="width:<?= round($s['inc'] / $staff_max * 100) ?>%"></i></div></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Top transactions -->
+  <div class="grid lg-g-2" style="margin-top:16px">
+    <?php foreach ([['Eng katta kirimlar', $top_in, true], ['Eng katta chiqimlar', $top_out, false]] as [$ttl, $rows, $isin]): ?>
+    <section class="card clip" aria-label="<?= e($ttl) ?>">
+      <div class="card-head"><h2 class="card-title"><?= icon($isin ? 'arrow-down-left' : 'arrow-up-right', 'i-sm') ?> <?= e($ttl) ?></h2></div>
+      <div class="list">
+        <?php foreach ($rows as $r): $mm = method_meta($r['m']); ?>
+        <div class="tx" style="padding-top:12px;padding-bottom:12px">
+          <div class="tx-main">
+            <div class="row between" style="gap:8px"><span class="tx-title"><?= e($r['cat']) ?></span><span class="tx-amt num <?= $isin ? 'text-in' : 'text-out' ?>"><?= $isin ? '+' : '−' ?><?= fmt($r['payment']) ?></span></div>
+            <div class="tx-meta"><span class="badge badge-<?= $r['m'] ?>"><?= e($mm['label']) ?></span><span><?= e(date('d.m.Y', strtotime($r['date']))) ?></span></div>
+          </div>
+        </div>
+        <?php endforeach; ?>
+        <?php if (!$rows): ?><div class="empty" style="padding:24px"><span class="fs-sm">Ma'lumot yo'q</span></div><?php endif; ?>
+      </div>
+    </section>
+    <?php endforeach; ?>
+  </div>
+  <?php endif; ?>
+</div>
+
+<?php
+$js = '<script>
+(function(){
+  if(!window.Chart || !document.getElementById("trendChart")) return;
+  var D = ' . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) . ';
+  var PAL = {
+    light: { inc:"#1baf7a", exp:"#eb6834", line:"#2a78d6", cash:"#eda100", click:"#2a78d6", bank:"#e87ba4" },
+    dark:  { inc:"#199e70", exp:"#d95926", line:"#3987e5", cash:"#c98500", click:"#3987e5", bank:"#d55181" }
+  };
+  function theme(){ var t=document.documentElement.getAttribute("data-theme"); if(t) return t; return matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"; }
+  function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function nf(n){ return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g," "); }
+  function short(n){ var a=Math.abs(n), s=n<0?"−":""; if(a>=1e9) return s+(a/1e9).toFixed(1).replace(/\.0$/,"")+" mlrd"; if(a>=1e6) return s+(a/1e6).toFixed(1).replace(/\.0$/,"")+" mln"; if(a>=1e3) return s+(a/1e3).toFixed(0)+" ming"; return s+nf(a); }
+  var charts = [], mode = "daily";
+  function base(c){
+    return { responsive:true, maintainAspectRatio:false, animation:{duration:350},
+      interaction:{ mode:"index", intersect:false },
+      plugins:{ legend:{ position:"top", align:"start", labels:{ usePointStyle:true, pointStyle:"rectRounded", boxWidth:8, boxHeight:8, color:css("--text-2"), font:{family:"Plus Jakarta Sans",size:12,weight:"600"}, padding:14 } },
+        tooltip:{ padding:10, cornerRadius:10, titleFont:{family:"Plus Jakarta Sans",weight:"700"}, bodyFont:{family:"Plus Jakarta Sans"}, usePointStyle:true, boxPadding:4,
+          callbacks:{ label:function(ctx){ var v = ctx.parsed.x!==undefined && ctx.chart.options.indexAxis==="y" ? ctx.parsed.x : ctx.parsed.y; return " "+ctx.dataset.label+": "+nf(v)+" so‘m"; } } } },
+      scales:{ x:{ grid:{display:false}, border:{color:css("--border")}, ticks:{ color:css("--text-3"), font:{family:"Plus Jakarta Sans",size:11}, maxRotation:0, autoSkip:true, maxTicksLimit:12 } },
+               y:{ beginAtZero:true, grid:{ color:css("--border") }, border:{display:false}, ticks:{ color:css("--text-3"), font:{family:"Plus Jakarta Sans",size:11}, callback:function(v){ return short(v); } } } } };
+  }
+  function build(){
+    charts.forEach(function(c){ c.destroy(); }); charts = [];
+    var P = PAL[theme()], surface = css("--surface");
+
+    // trend
+    var o = base(); var many = D.labels.length > 62, ds;
+    if(mode === "daily"){
+      ds = many ? [
+        { label:"Kirim", data:D.inc, borderColor:P.inc, backgroundColor:P.inc, borderWidth:2, pointRadius:0, pointHoverRadius:5, pointHoverBorderWidth:2, pointHoverBorderColor:surface, tension:.25 },
+        { label:"Chiqim", data:D.exp, borderColor:P.exp, backgroundColor:P.exp, borderWidth:2, pointRadius:0, pointHoverRadius:5, pointHoverBorderWidth:2, pointHoverBorderColor:surface, tension:.25 } ] : [
+        { label:"Kirim", data:D.inc, backgroundColor:P.inc, borderRadius:{topLeft:4,topRight:4}, maxBarThickness:22, borderColor:surface, borderWidth:{top:0,left:1,right:1,bottom:0} },
+        { label:"Chiqim", data:D.exp, backgroundColor:P.exp, borderRadius:{topLeft:4,topRight:4}, maxBarThickness:22, borderColor:surface, borderWidth:{top:0,left:1,right:1,bottom:0} } ];
+      charts.push(new Chart(document.getElementById("trendChart"), { type: many?"line":"bar", data:{ labels:D.labels, datasets:ds }, options:o }));
+    } else {
+      o.scales.y.beginAtZero = false;
+      charts.push(new Chart(document.getElementById("trendChart"), { type:"line", data:{ labels:D.labels, datasets:[
+        { label:"Jamlanma sof foyda", data:D.cum, borderColor:P.line, backgroundColor:P.line, borderWidth:2.5, pointRadius:D.labels.length>40?0:3, pointHoverRadius:6, pointBackgroundColor:P.line, pointBorderColor:surface, pointBorderWidth:2, tension:.25 } ] }, options:o }));
+    }
+
+    // weekday
+    var w = base(); w.interaction = { mode:"index", intersect:false };
+    charts.push(new Chart(document.getElementById("wdChart"), { type:"bar", data:{ labels:D.wd.labels, datasets:[
+      { label:"Kirim", data:D.wd.inc, backgroundColor:P.inc, borderRadius:{topLeft:4,topRight:4}, maxBarThickness:20 },
+      { label:"Chiqim", data:D.wd.exp, backgroundColor:P.exp, borderRadius:{topLeft:4,topRight:4}, maxBarThickness:20 } ] }, options:w }));
+
+    // expense: category x method (stacked, horizontal)
+    var xc = document.getElementById("xcChart");
+    if(xc){
+      var x = base(); x.indexAxis = "y"; x.scales.x.stacked = true; x.scales.y.stacked = true;
+      x.scales.x.grid = { color:css("--border") }; x.scales.x.ticks.callback = function(v){ return short(v); }; x.scales.x.beginAtZero = true; x.scales.x.border = {display:false};
+      x.scales.y.grid = { display:false }; x.scales.y.beginAtZero = undefined; x.scales.y.ticks.callback = undefined; x.scales.y.border = {color:css("--border")};
+      x.scales.y.ticks.font = {family:"Plus Jakarta Sans",size:12,weight:"600"}; x.scales.y.ticks.color = css("--text-2");
+      var seg = function(k,l){ return { label:l, data:D.xc.series[k], backgroundColor:P[k], borderColor:surface, borderWidth:2, borderRadius:3 }; };
+      charts.push(new Chart(xc, { type:"bar", data:{ labels:D.xc.labels, datasets:[ seg("cash","Naqd"), seg("click","Click"), seg("bank","Bank") ] }, options:x }));
+    }
+  }
+  document.getElementById("trendMode").addEventListener("click", function(e){
+    var b = e.target.closest("[data-mode]"); if(!b) return; mode = b.dataset.mode;
+    this.querySelectorAll("[data-mode]").forEach(function(x){ x.classList.toggle("on", x===b); x.setAttribute("aria-pressed", x===b); });
+    document.getElementById("trendChart").setAttribute("aria-label", mode==="daily" ? "Kunlik kirim va chiqim grafigi" : "Jamlanma sof foyda grafigi");
+    build();
+  });
+  window.addEventListener("themechange", build);
+  window.addEventListener("beforeprint", function(){ charts.forEach(function(c){ c.resize(); }); });
+  build();
+})();
+</script>';
+ui_end(['active' => 'analytics', 'scripts' => $js]);
