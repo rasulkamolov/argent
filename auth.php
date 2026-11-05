@@ -232,6 +232,10 @@ function do_login(string $username, string $password): ?string {
     $_SESSION['scope_branch'] = 0;
     $GLOBALS['_auth_reset'] = true;
     audit('login', 'user', (int)$u['id'], null, $u['branch_id'] ? (int)$u['branch_id'] : null);
+    if ($u['role'] === 'admin') {   // one automatic safety copy per day, taken when an admin signs in
+        $dir = backup_dir();
+        if ($dir && !glob($dir . '/backup_' . date('Ymd') . '_*_auto.sqlite')) db_backup('auto');
+    }
     return null;
 }
 
@@ -293,6 +297,6 @@ function db_backup(string $label = 'manual'): ?string {
     catch (Throwable $e) { if (!@copy(DB_FILE, $file)) return null; }
     $all = glob($d . '/backup_*.sqlite') ?: [];
     sort($all);
-    foreach (array_slice($all, 0, max(0, count($all) - 15)) as $old) @unlink($old);
+    foreach (array_slice($all, 0, max(0, count($all) - 30)) as $old) @unlink($old);
     return is_file($file) ? $file : null;
 }

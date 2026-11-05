@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/layout.php';
+require_once __DIR__ . '/proofs.php';
 
 /* =========================================================================
    LOGIN
@@ -264,6 +265,8 @@ ui_start('daily');
             <div class="tx-meta">
               <?php if ($all_mode): ?><span class="row gap-1" style="gap:5px"><?= branch_avatar(branch_get($rb), 'xs') ?><b class="text-2"><?= e($row['branch_name']) ?></b></span><?php endif; ?>
               <span class="badge badge-<?= $m ?>"><?= icon($mm['icon'], 'i-xs') ?><?= e($mm['label']) ?></span>
+              <?php if (!empty($row['proof'])): ?><button type="button" class="badge badge-proof ok" data-proof-view="<?= (int)$row['id'] ?>" title="To'lov skrinshotini ko'rish"><?= icon('image', 'i-xs') ?>Skrinshot</button>
+              <?php elseif (proof_is_missing($row)): ?><span class="badge badge-proof miss" title="Click/Bank to'lovi uchun skrinshot biriktirilmagan"><?= icon('image-off', 'i-xs') ?>Skrinshotsiz</span><?php endif; ?>
               <?php if ($row['is_modified']): ?><span class="badge badge-warn">Tahrirlangan</span><?php endif; ?>
               <?php if ($row['author']): ?><span><?= e($row['author']) ?></span><?php endif; ?>
               <?php if ($time): ?><span class="num"><?= e($time) ?></span><?php endif; ?>
@@ -273,6 +276,8 @@ ui_start('daily');
           <div class="tx-side no-print">
             <button type="button" class="btn btn-ghost btn-icon btn-sm" data-menu="#menu<?= (int)$row['id'] ?>" aria-haspopup="menu" aria-expanded="false" aria-label="Amallar"><?= icon('ellipsis-vertical') ?></button>
             <template id="menu<?= (int)$row['id'] ?>">
+              <?php if (!empty($row['proof'])): ?><a href="proof.php?id=<?= (int)$row['id'] ?>" data-proof-view="<?= (int)$row['id'] ?>" role="menuitem"><?= icon('image', 'i-sm') ?> Skrinshotni ko'rish</a>
+              <?php elseif (($row['click'] || $row['bank']) && ($canE || is_admin() || is_manager() || (int)$row['user_id'] === (int)$me['id'])): ?><button type="button" role="menuitem" data-attach-proof="<?= (int)$row['id'] ?>"><?= icon('image-plus', 'i-sm') ?> Skrinshot qo'shish</button><?php endif; ?>
               <a href="view_history.php?id=<?= (int)$row['id'] ?>" role="menuitem"><?= icon('history', 'i-sm') ?> O'zgarishlar tarixi</a>
               <?php if ($canE): ?><a href="edit_transaction.php?id=<?= (int)$row['id'] ?>" role="menuitem"><?= icon('pencil', 'i-sm') ?> Tahrirlash</a><?php endif; ?>
               <?php if ($canD): ?>
@@ -299,6 +304,7 @@ ui_start('daily');
 
 <?php
 $fab = $can_add ? '<button class="fab no-print" type="button" data-open="#addDialog" aria-label="Yangi o\'tkazma qo\'shish">' . icon('plus') . '</button>' : '';
+$proofReq = proof_required((int)($scope ?: ($me['branch_id'] ?? 0)));   // cashiers must attach a screenshot for Click/Bank
 
 ob_start(); if ($can_add): ?>
 <dialog class="modal" id="addDialog" aria-labelledby="addTitle">
@@ -307,7 +313,7 @@ ob_start(); if ($can_add): ?>
       <h2 class="modal-title" id="addTitle">Yangi o'tkazma</h2>
       <button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Yopish"><?= icon('x') ?></button>
     </div>
-    <form action="process.php" method="post" class="stack" id="addForm" data-loading>
+    <form action="process.php" method="post" enctype="multipart/form-data" class="stack" id="addForm" data-loading>
       <?= csrf_field() ?>
       <input type="hidden" name="action" value="add_transaction">
 
@@ -344,6 +350,12 @@ ob_start(); if ($can_add): ?>
         </div>
       </div>
 
+      <div class="field" id="proofField" hidden>
+        <span class="label">To'lov skrinshoti <?= $proofReq ? '<span class="req">*</span>' : '<span class="text-3 fw-5">(tavsiya etiladi)</span>' ?></span>
+        <?= ui_proof_drop($proofReq, 'proof', 'proofBox') ?>
+        <span class="hint">Click/Bank o'tkazmasi haqiqatan kelib tushganini keyin tekshirish uchun.</span>
+      </div>
+
       <div class="field">
         <label class="label" for="catSelect">Kategoriya</label>
         <select class="select" name="category_id" id="catSelect"></select>
@@ -371,7 +383,19 @@ ob_start(); if ($can_add): ?>
     </form>
   </div>
 </dialog>
-<?php endif;
+<?php endif; ?>
+<dialog class="modal" id="attachDialog" aria-labelledby="apTitle">
+  <div class="modal-box">
+    <div class="modal-head"><h2 class="modal-title" id="apTitle">Skrinshot qo'shish</h2><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Yopish"><?= icon('x') ?></button></div>
+    <form action="process.php" method="post" enctype="multipart/form-data" class="stack" id="attachForm" data-loading>
+      <?= csrf_field() ?><input type="hidden" name="action" value="attach_proof"><input type="hidden" name="id" id="apId">
+      <?= ui_proof_drop(true, 'proof', 'apBox') ?>
+      <p class="hint">To'lov (Click/Bank) o'tkazilganini tasdiqlovchi rasm. Qo'shilgach kassir uni almashtira olmaydi.</p>
+      <button type="submit" class="btn btn-primary btn-lg btn-block">Biriktirish</button>
+    </form>
+  </div>
+</dialog>
+<?php
 $dialog = ob_get_clean();
 
 $script = $can_add ? '<script>
@@ -397,12 +421,24 @@ $script = $can_add ? '<script>
     var v = document.getElementById("paymentInput").value.replace(/\D/g,"");
     if(!v || +v <= 0){ e.preventDefault(); toast("Summani kiriting","error"); document.getElementById("paymentInput").focus(); }
   });
-  document.getElementById("addDialog").addEventListener("close", function(){ form.reset(); fill(); });
+  var pf = document.getElementById("proofField"), pbox = document.getElementById("proofBox");
+  function methodChange(){ var m = form.querySelector("input[name=method]:checked").value; pf.hidden = (m === "cash"); if (m === "cash" && pbox.reset) pbox.reset(); }
+  form.querySelectorAll("input[name=method]").forEach(function(r){ r.addEventListener("change", methodChange); });
+  document.getElementById("addDialog").addEventListener("close", function(){ form.reset(); if (pbox.reset) pbox.reset(); fill(); methodChange(); });
   document.addEventListener("keydown", function(e){
     if((e.key==="n"||e.key==="N") && !e.ctrlKey && !e.metaKey && !e.altKey && !/INPUT|TEXTAREA|SELECT/.test((document.activeElement||{}).tagName||"") && !document.querySelector("dialog[open]")){ e.preventDefault(); openDialog(document.getElementById("addDialog")); }
   });
   fill();
 })();
 </script>' : '';
+
+$script .= '<script>(function(){
+  document.addEventListener("click", function(e){
+    var b = e.target.closest("[data-attach-proof]"); if(!b) return;
+    document.getElementById("apId").value = b.getAttribute("data-attach-proof");
+    var z = document.getElementById("apBox"); if (z && z.reset) z.reset();
+    openDialog(document.getElementById("attachDialog"));
+  });
+})();</script>';
 
 ui_end(['active' => 'daily', 'after' => $fab . $dialog, 'scripts' => $script]);

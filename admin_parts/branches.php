@@ -37,6 +37,10 @@
       <label class="field"><span class="label">Kassir o'chirishi</span>
         <select class="select input-sm" data-bset="staff_can_delete">
           <option value="default" <?= $own2 === 'default' ? 'selected' : '' ?>>Standart (<?= $gd ? 'Ha' : "Yo'q" ?>)</option><option value="1" <?= $own2 === '1' ? 'selected' : '' ?>>Ha</option><option value="0" <?= $own2 === '0' ? 'selected' : '' ?>>Yo'q</option></select></label>
+      <label class="field" style="grid-column:1/-1"><span class="label">Click/Bank skrinshoti majburiy</span>
+        <select class="select input-sm" data-bset="require_proof">
+          <?php $own3 = array_key_exists("b$id.require_proof", settings_all()) ? setting('require_proof', '1', $id) : 'default'; $gp3 = setting('require_proof', '1') === '1'; ?>
+          <option value="default" <?= $own3 === 'default' ? 'selected' : '' ?>>Standart (<?= $gp3 ? 'Ha' : "Yo'q" ?>)</option><option value="1" <?= $own3 === '1' ? 'selected' : '' ?>>Ha</option><option value="0" <?= $own3 === '0' ? 'selected' : '' ?>>Yo'q</option></select></label>
       <input type="hidden" name="value" value="">
     </form>
     <div class="row gap-2 row-wrap" style="margin-top:auto">
@@ -44,6 +48,7 @@
       <button type="button" class="btn btn-sm" data-edit-branch
         data-id="<?= $id ?>" data-name="<?= e($b['name']) ?>" data-address="<?= e($b['address']) ?>" data-phone="<?= e($b['phone']) ?>" data-note="<?= e($b['note']) ?>"
         data-color="<?= (int)$b['color'] ?>" data-tracked="<?= $r['tracked'] ? 1 : 0 ?>" data-cash="<?= (int)round($r['bal']['cash']) ?>" data-click="<?= (int)round($r['bal']['click']) ?>" data-bank="<?= (int)round($r['bal']['bank']) ?>"><?= icon('pencil', 'i-sm') ?> Tahrirlash</button>
+      <a class="btn btn-sm btn-icon" href="backup.php?branch=<?= $id ?>" aria-label="Filial ma'lumotini yuklab olish" title="Faqat shu filial ma'lumotini yuklab olish (.sqlite)"><?= icon('download', 'i-sm') ?></a>
       <a class="btn btn-sm btn-icon" href="process.php?action=toggle_branch&id=<?= $id ?>" data-post
          <?php if ($b['is_active']): ?>data-confirm="«<?= e($b['name']) ?>» arxivlanadi: kassirlar kira olmaydi, ma'lumotlar saqlanadi." data-confirm-title="Filialni arxivlaysizmi?" data-confirm-ok="Arxivlash"<?php endif; ?>
          aria-label="<?= $b['is_active'] ? 'Arxivlash' : 'Faollashtirish' ?>" title="<?= $b['is_active'] ? 'Arxivlash' : 'Faollashtirish' ?>"><?= icon($b['is_active'] ? 'archive' : 'circle-check', 'i-sm') ?></a>

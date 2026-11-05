@@ -13,7 +13,7 @@ Options -Indexes
 </FilesMatch>
 
 # Include-only PHP files (no direct access)
-<FilesMatch "^(db|auth|compat|layout|report_lib|import_lib)\.php$">
+<FilesMatch "^(db|auth|compat|layout|report_lib|import_lib|proofs)\.php$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

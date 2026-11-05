@@ -5,6 +5,7 @@
  * Requires layout.php to be loaded first.
  */
 
+require_once __DIR__ . '/proofs.php';
 const RL_METHOD_SQL = SQL_METHOD;
 
 function rl_presets(): array {
@@ -38,6 +39,7 @@ function rl_filters(): array {
         'start' => $start, 'end' => $end, 'method' => $method, 'branch' => $branch,
         'cat' => (int)($_GET['cat'] ?? 0), 'user' => (int)($_GET['user'] ?? 0),
         'q' => trim($_GET['q'] ?? ''),
+        'proof' => in_array($_GET['proof'] ?? '', ['missing', 'has'], true) ? $_GET['proof'] : '',
     ];
 }
 
@@ -53,6 +55,8 @@ function rl_where(array $f, ?string $start = null, ?string $end = null): array {
     if ($f['cat'])  { $w[] = "t.category_id = ?"; $p[] = $f['cat']; }
     if ($f['user']) { $w[] = "t.user_id = ?";     $p[] = $f['user']; }
     if ($f['q'] !== '') { $w[] = "t.comment LIKE ?"; $p[] = '%' . $f['q'] . '%'; }
+    if (($f['proof'] ?? '') === 'missing') $w[] = proof_missing_sql('t');
+    if (($f['proof'] ?? '') === 'has') $w[] = "(t.click = 1 OR t.bank = 1) AND t.proof IS NOT NULL AND t.proof <> ''";
     return [implode(' AND ', $w), $p];
 }
 
@@ -60,7 +64,7 @@ function rl_where(array $f, ?string $start = null, ?string $end = null): array {
 function rl_qs(array $f, array $over = []): string {
     $q = array_merge(array_filter([
         'start' => $f['start'], 'end' => $f['end'], 'method' => $f['method'], 'branch' => is_admin() ? (int)$f['branch'] : null,
-        'cat' => $f['cat'] ?: null, 'user' => $f['user'] ?: null, 'q' => $f['q'] !== '' ? $f['q'] : null,
+        'cat' => $f['cat'] ?: null, 'user' => $f['user'] ?: null, 'q' => $f['q'] !== '' ? $f['q'] : null, 'proof' => $f['proof'] ?: null,
     ], fn($v) => $v !== null && $v !== ''), $over);
     return http_build_query(array_filter($q, fn($v) => $v !== null && $v !== ''));
 }
@@ -125,8 +129,8 @@ function rl_render_filters(PDO $conn, array $f, string $action, array $hidden = 
     $cats  = categories_for_branch((int)$f['branch']);
     $ucond = $f['branch'] ? "WHERE branch_id = " . (int)$f['branch'] . " OR role = 'admin'" : (is_admin() ? "" : "WHERE branch_id = " . (int)scope_branch());
     $users = $conn->query("SELECT id, username FROM users $ucond ORDER BY username")->fetchAll(PDO::FETCH_ASSOC);
-    $adv = $f['method'] !== '' || $f['cat'] || $f['user'] || ($withSearch && $f['q'] !== '');
-    $advCount = (int)($f['method'] !== '') + (int)(bool)$f['cat'] + (int)(bool)$f['user'] + (int)($withSearch && $f['q'] !== '');
+    $adv = $f['method'] !== '' || $f['cat'] || $f['user'] || $f['proof'] !== '' || ($withSearch && $f['q'] !== '');
+    $advCount = (int)($f['method'] !== '') + (int)(bool)$f['cat'] + (int)(bool)$f['user'] + (int)($f['proof'] !== '') + (int)($withSearch && $f['q'] !== '');
     ?>
 <section class="card card-pad filters no-print" aria-label="Filtrlar">
   <div class="chips" role="group" aria-label="Tezkor davrlar">
@@ -169,6 +173,12 @@ function rl_render_filters(PDO $conn, array $f, string $action, array $hidden = 
           <select class="select input-sm" id="fUser" name="user">
             <option value="0">Hammasi</option>
             <?php foreach ($users as $u): ?><option value="<?= (int)$u['id'] ?>" <?= $f['user'] === (int)$u['id'] ? 'selected' : '' ?>><?= e($u['username']) ?></option><?php endforeach; ?>
+          </select></div>
+        <div class="field"><label class="label" for="fProof">Skrinshot (Click/Bank)</label>
+          <select class="select input-sm" id="fProof" name="proof">
+            <option value="">Hammasi</option>
+            <option value="missing" <?= $f['proof'] === 'missing' ? 'selected' : '' ?>>Skrinshotsiz</option>
+            <option value="has" <?= $f['proof'] === 'has' ? 'selected' : '' ?>>Skrinshotli</option>
           </select></div>
         <?php if ($withSearch): ?>
         <div class="field"><label class="label" for="fQ">Izoh bo'yicha qidirish</label>

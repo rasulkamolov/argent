@@ -11,7 +11,7 @@ if (!defined('DB_FILE')) {
     define('DB_FILE', getenv('ARGENT_DB') ?: (__DIR__ . '/harvards_finance.sqlite'));
 }
 if (!defined('DEFAULT_BRANCH_NAME')) define('DEFAULT_BRANCH_NAME', "OXFORD Bo'zqal'a");
-const DB_SCHEMA_VERSION = 3;   // v2: multi-branch, v3: branches.balance_ok
+const DB_SCHEMA_VERSION = 4;   // v2: multi-branch, v3: branches.balance_ok, v4: transactions.proof (payment screenshots)
 
 function db_has_column(PDO $c, string $table, string $col): bool {
     foreach ($c->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -91,6 +91,7 @@ function db_migrate(PDO $c): void {
         db_add_column($c, 'users', 'last_login_at', 'TEXT');
         db_add_column($c, 'transactions', 'branch_id', 'INTEGER');
         db_add_column($c, 'transactions', 'ext_ref', 'TEXT');
+        db_add_column($c, 'transactions', 'proof', 'TEXT');      // relative path of the payment screenshot (data/proofs/...)
         db_add_column($c, 'employees', 'branch_id', 'INTEGER');
         db_add_column($c, 'employees', 'phone', "TEXT DEFAULT ''");
         db_add_column($c, 'categories', 'branch_id', 'INTEGER');   // NULL = shared by all branches
@@ -133,6 +134,8 @@ function db_migrate(PDO $c): void {
         $c->exec("CREATE INDEX IF NOT EXISTS idx_counts_branch ON cash_counts(branch_id, date)");
         $c->exec("CREATE INDEX IF NOT EXISTS idx_login_time ON login_attempts(created_at)");
 
+        // screenshots are only demanded for transactions dated from the day this feature went live
+        $c->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('proof_since', ?)")->execute([date('Y-m-d')]);
         $c->exec("PRAGMA user_version = " . DB_SCHEMA_VERSION);
         $c->exec("COMMIT");
     } catch (Throwable $e) {

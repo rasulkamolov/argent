@@ -16,6 +16,9 @@ $cat_out = rl_by_category($conn, $f, 'out');
 $daily = array_reverse(rl_daily($conn, $f));
 $multi = is_admin() && !$f['branch'];                       // admin looking at every branch
 $by_branch = $multi ? rl_by_branch($conn, $f) : [];
+// Click/Bank payments in the period that still have no screenshot
+$f_np = $f; $f_np['proof'] = 'missing'; [$w_np, $p_np] = rl_where($f_np);
+$st_np = $conn->prepare("SELECT COUNT(*) AS n, COALESCE(SUM(t.payment),0) AS s FROM transactions t WHERE $w_np AND t.cash_in = 1"); $st_np->execute($p_np); $np = $st_np->fetch(PDO::FETCH_ASSOC);
 
 // transactions list (paged in SQL)
 [$w, $p] = rl_where($f);
@@ -99,6 +102,12 @@ ui_start('reports');
       </table>
     </div>
   </section>
+  <?php endif; ?>
+
+  <?php if ((int)$np['n'] > 0 && $f['proof'] !== 'missing'): ?>
+  <div class="alert info" style="margin-top:16px;background:var(--warn-soft);color:var(--warn-text)"><?= icon('image-off') ?>
+    <div class="grow"><b><?= fmt($np['n']) ?> ta</b> Click/Bank kirim (<?= e(fmt_short($np['s'])) ?> so'm) uchun to'lov skrinshoti biriktirilmagan.</div>
+    <a class="btn btn-sm" href="hisobot.php?<?= e(rl_qs($f, ['proof' => 'missing'])) ?>#tx">Ko'rish</a></div>
   <?php endif; ?>
 
   <!-- Payment methods -->
@@ -189,7 +198,7 @@ ui_start('reports');
             <td class="c-cat"><span class="cat-cell"><span class="icon-tile <?= $is_in ? 'in' : 'out' ?>"><?= icon($is_in ? 'arrow-down-left' : 'arrow-up-right') ?></span><span><?= e($r['cat'] ?: ($is_in ? 'Kirim' : 'Chiqim')) ?></span></span></td>
             <td class="c-break"></td>
             <td class="c-note"><?= linkify($r['comment']) ?></td>
-            <td class="c-method"><span class="badge badge-<?= $m ?>"><?= icon($mm['icon'], 'i-xs') ?><?= e($mm['label']) ?></span></td>
+            <td class="c-method"><span class="badge badge-<?= $m ?>"><?= icon($mm['icon'], 'i-xs') ?><?= e($mm['label']) ?></span><?php if (!empty($r['proof'])): ?> <button type="button" class="badge badge-proof ok" data-proof-view="<?= (int)$r['id'] ?>" title="Skrinshotni ko'rish"><?= icon('image', 'i-xs') ?></button><?php elseif (proof_is_missing($r)): ?> <span class="badge badge-proof miss" title="Skrinshot yo'q"><?= icon('image-off', 'i-xs') ?></span><?php endif; ?></td>
             <td class="c-author text-2"><?= e($r['author']) ?></td>
             <td class="c-amt r num fw-8 nowrap <?= $is_in ? 'text-in' : 'text-out' ?>"><?= $is_in ? '+' : '−' ?><?= fmt($r['payment']) ?></td>
           </tr>

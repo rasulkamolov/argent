@@ -1,6 +1,7 @@
 <?php
 /**
- * Import of phpMyAdmin/MySQL dumps (INSERT INTO `transactions` ...) into a branch.
+ * Import into a branch from (a) phpMyAdmin/MySQL dumps (INSERT INTO `transactions` ...) or
+ * (b) an old single-branch SQLite database file (.db / .sqlite) - e.g. to restore a branch's history.
  * Used by import.php (admin UI) and tools/import_cli.php.
  *
  *   rows  = sqlimp_parse($sqlText)                 -> list of assoc rows
@@ -139,16 +140,94 @@ function sqlimp_commit(array $plan, int $branchId, array $map, string $source = 
                 $uid[$name] = (int)db()->lastInsertId(); $created[] = ['username' => strtolower($name), 'password' => $pw];
             }
         }
-        $ins = db()->prepare("INSERT OR IGNORE INTO transactions (branch_id, user_id, category_id, payment, cash, click, bank, cash_in, cash_out, comment, date, created_at, ext_ref)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        $ins = db()->prepare("INSERT OR IGNORE INTO transactions (branch_id, user_id, category_id, employee_id, payment, cash, click, bank, cash_in, cash_out, comment, date, created_at, ext_ref, is_modified)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        $empCache = []; $hist = db()->prepare("INSERT INTO transaction_history (transaction_id, user_id, field_name, old_value, new_value, changed_at) VALUES (?,?,?,?,?,?)");
         foreach ($plan['items'] as $it) {
-            $ins->execute([$branchId, $uid[$it['by']] ?? null, sqlimp_category_id($it['category'], $it['type'], $branchId, $catCache), $it['payment'],
+            $eid = null;
+            if (!empty($it['employee']['name'])) {
+                $k = mb_strtolower($it['employee']['name']);
+                if (!isset($empCache[$k])) {
+                    $st = db()->prepare("SELECT id FROM employees WHERE branch_id = ? AND lower(name) = lower(?)"); $st->execute([$branchId, $it['employee']['name']]); $x = $st->fetchColumn();
+                    if (!$x) { db()->prepare("INSERT INTO employees (name, position, salary, branch_id) VALUES (?,?,?,?)")->execute([$it['employee']['name'], $it['employee']['position'] ?? '', $it['employee']['salary'] ?? 0, $branchId]); $x = db()->lastInsertId(); }
+                    $empCache[$k] = (int)$x;
+                }
+                $eid = $empCache[$k];
+            }
+            $ins->execute([$branchId, $uid[$it['by']] ?? null, sqlimp_category_id($it['category'], $it['cat_type'] ?? $it['type'], $branchId, $catCache), $eid, $it['payment'],
                 $it['method'] === 'cash' ? 1 : 0, $it['method'] === 'click' ? 1 : 0, $it['method'] === 'bank' ? 1 : 0,
-                $it['type'] === 'income' ? 1 : 0, $it['type'] === 'expense' ? 1 : 0, $it['comment'], $it['date'], $it['created_at'], $it['ref']]);
-            if ($ins->rowCount()) $inserted++; else $ignored++;
+                $it['type'] === 'income' ? 1 : 0, $it['type'] === 'expense' ? 1 : 0, $it['comment'], $it['date'], $it['created_at'], $it['ref'], (int)($it['is_modified'] ?? 0)]);
+            if ($ins->rowCount()) {
+                $inserted++; $newId = (int)db()->lastInsertId();
+                foreach ($it['history'] ?? [] as $h) $hist->execute([$newId, $uid[$h['by'] ?? ''] ?? null, $h['field'], $h['old'], $h['new'], $h['at']]);
+            } else $ignored++;
         }
         db()->commit();
     } catch (Throwable $e) { db()->rollBack(); throw $e; }
     audit('import.commit', 'branch', $branchId, ['source' => $source, 'inserted' => $inserted, 'ignored' => $ignored, 'users_created' => count($created), 'backup' => $backup ? basename($backup) : null], $branchId);
     return ['inserted' => $inserted, 'ignored' => $ignored, 'created_users' => $created, 'backup' => $backup ? basename($backup) : null, 'branch' => $b['name']];
+}
+
+
+/* ============================================================================
+   Import from an old SQLite database file
+   ============================================================================ */
+function dbimp_is_sqlite(string $path): bool {
+    $h = @file_get_contents($path, false, null, 0, 16);
+    return $h !== false && strncmp($h, "SQLite format 3\0", 16) === 0;
+}
+function dbimp_norm(?string $c): string { return mb_strtolower(trim(preg_replace('/\s+/u', ' ', (string)$c))); }
+
+/**
+ * Reads transactions (+ users, categories, employees, edit history) from an old database file.
+ * Rows already present in the target branch are skipped: first by their import reference, then by a
+ * fingerprint (date, amount, direction, method, comment) matched as a multiset - so re-importing
+ * the same history never duplicates anything, while genuinely identical repeated payments still count.
+ */
+function dbimp_plan(string $path, int $branchId, array $opt = []): array {
+    $src = new PDO('sqlite:' . $path); $src->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); $src->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+    $tables = $src->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
+    if (!in_array('transactions', $tables, true)) throw new RuntimeException("Faylda «transactions» jadvali yo'q");
+    $cols = array_column($src->query("PRAGMA table_info(transactions)")->fetchAll(), 'name');
+    foreach (['payment', 'date', 'cash_in'] as $need) if (!in_array($need, $cols, true)) throw new RuntimeException("«transactions» jadvalida «$need» ustuni yo'q");
+    $has = function ($c) use ($cols) { return in_array($c, $cols, true); };
+    $u = []; if (in_array('users', $tables, true)) foreach ($src->query("SELECT id, username FROM users") as $r) $u[(int)$r['id']] = $r['username'];
+    $cat = []; if (in_array('categories', $tables, true)) foreach ($src->query("SELECT id, name, type FROM categories") as $r) $cat[(int)$r['id']] = $r;
+    $emp = []; if (in_array('employees', $tables, true)) foreach ($src->query("SELECT * FROM employees") as $r) $emp[(int)$r['id']] = $r;
+    $hist = [];
+    if (in_array('transaction_history', $tables, true)) foreach ($src->query("SELECT * FROM transaction_history ORDER BY id") as $r) $hist[(int)$r['transaction_id']][] = $r;
+
+    // what the target branch already has
+    $haveRef = []; $fp = [];
+    $st = db()->prepare("SELECT ext_ref, date, payment, cash_in, cash, click, bank, comment FROM transactions WHERE branch_id = ?"); $st->execute([$branchId]);
+    foreach ($st->fetchAll() as $r) {
+        if ($r['ext_ref']) $haveRef[$r['ext_ref']] = true;
+        $m = $r['bank'] ? 'bank' : ($r['click'] ? 'click' : 'cash');
+        $k = $r['date'] . '|' . round($r['payment']) . '|' . ($r['cash_in'] ? 'i' : 'o') . '|' . $m . '|' . dbimp_norm($r['comment']);
+        $fp[$k] = ($fp[$k] ?? 0) + 1;
+    }
+    $items = []; $users = []; $dup = 0; $sum = ['income' => 0.0, 'expense' => 0.0]; $cnt = ['income' => 0, 'expense' => 0]; $dmin = $dmax = null; $total = 0;
+    foreach ($src->query("SELECT * FROM transactions ORDER BY id") as $r) {
+        $total++;
+        $in = !empty($r['cash_in']); $type = $in ? 'income' : 'expense';
+        $method = ($has('bank') && !empty($r['bank'])) ? 'bank' : (!empty($r['click']) ? 'click' : 'cash');
+        $ref = 'db:' . $r['id']; $comment = trim((string)($r['comment'] ?? ''));
+        $k = substr((string)$r['date'], 0, 10) . '|' . round((float)$r['payment']) . '|' . ($in ? 'i' : 'o') . '|' . $method . '|' . dbimp_norm($comment);
+        if (isset($haveRef[$ref])) { $dup++; continue; }
+        if (!empty($fp[$k])) { $fp[$k]--; $dup++; continue; }
+        $by = $u[(int)($r['user_id'] ?? 0)] ?? ''; $users[$by] = ($users[$by] ?? 0) + 1;
+        $c = $cat[(int)($r['category_id'] ?? 0)] ?? null;
+        $e = !empty($r['employee_id']) ? ($emp[(int)$r['employee_id']] ?? null) : null;
+        $h = [];
+        foreach ($hist[(int)$r['id']] ?? [] as $x) $h[] = ['field' => $x['field_name'], 'old' => $x['old_value'], 'new' => $x['new_value'], 'at' => $x['changed_at'], 'by' => $u[(int)($x['user_id'] ?? 0)] ?? ''];
+        $items[] = ['ref' => $ref, 'date' => substr((string)$r['date'], 0, 10), 'payment' => (float)$r['payment'], 'type' => $type, 'method' => $method, 'comment' => $comment, 'by' => $by,
+                    'created_at' => $r['created_at'] ?? null, 'category' => $c ? $c['name'] : sqlimp_category_for($type, $comment), 'cat_type' => $c['type'] ?? $type,
+                    'is_modified' => (int)($r['is_modified'] ?? 0), 'history' => $h,
+                    'employee' => $e ? ['name' => $e['name'], 'position' => $e['position'] ?? '', 'salary' => (float)($e['salary'] ?? 0)] : null];
+        $sum[$type] += (float)$r['payment']; $cnt[$type]++;
+        $d = substr((string)$r['date'], 0, 10); if ($dmin === null || $d < $dmin) $dmin = $d; if ($dmax === null || $d > $dmax) $dmax = $d;
+    }
+    ksort($users);
+    return ['items' => $items, 'users' => $users, 'skipped_empty' => 0, 'unknown' => 0, 'duplicates' => $dup, 'source_rows' => $total,
+            'income_n' => $cnt['income'], 'income_sum' => $sum['income'], 'expense_n' => $cnt['expense'], 'expense_sum' => $sum['expense'], 'date_min' => $dmin, 'date_max' => $dmax, 'kind' => 'sqlite'];
 }

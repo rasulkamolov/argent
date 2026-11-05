@@ -683,3 +683,33 @@ a.bcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border
 .hero2 { background: linear-gradient(135deg, #3f3ac4 0%, #5b5bf0 55%, #8a7bff 100%); color: #fff; border-color: transparent; box-shadow: 0 18px 36px -18px rgba(79,70,229,.75); }
 .hero2 .kpi-label, .hero2 .kpi-foot { color: rgba(255,255,255,.8); }
 .hero2 .kpi-value small { color: rgba(255,255,255,.75); }
+
+/* ==========================================================================
+   Payment proof (screenshot) drop zone + viewer
+   ========================================================================== */
+.proof-drop {
+  position: relative; border: 2px dashed var(--border-strong); border-radius: 16px; background: var(--surface-2);
+  padding: 16px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; outline: none;
+}
+.proof-drop:hover, .proof-drop:focus-visible, .proof-drop.over { border-color: var(--primary); background: var(--primary-soft); }
+.proof-drop.need { border-color: var(--out); }
+.proof-drop input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.proof-drop .pd-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--text-2); }
+.proof-drop .pd-empty b { font-size: 14px; color: var(--text); }
+.proof-drop .pd-empty small { font-size: 12px; color: var(--text-3); }
+.proof-drop .pd-ic { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: var(--surface); color: var(--primary-text); box-shadow: var(--shadow-1); margin-bottom: 4px; }
+.proof-drop .pd-preview { display: flex; align-items: center; gap: 12px; text-align: left; }
+.proof-drop .pd-preview img { width: 76px; height: 76px; object-fit: cover; border-radius: 12px; border: 1px solid var(--border); background: #fff; flex: none; }
+.proof-drop .pd-meta { min-width: 0; flex: 1; font-size: 13px; }
+.proof-drop .pd-meta b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proof-drop .pd-meta span { color: var(--text-3); font-size: 12px; }
+.req { color: var(--out-text); }
+.badge-proof { cursor: pointer; border: 0; font-family: inherit; }
+.badge-proof.ok { background: var(--in-soft); color: var(--in-text); }
+.badge-proof.miss { background: var(--warn-soft); color: var(--warn-text); }
+.badge-proof:hover { filter: brightness(.96); }
+#proofDialog .modal-box { padding-top: 16px; }
+#proofDialog img { display: block; width: 100%; max-height: 70dvh; object-fit: contain; border-radius: 14px; background: var(--surface-3); }
+@media (min-width: 640px) { #proofDialog .modal-box { width: min(560px, calc(100% - 32px)); } }
+.proof-thumb { display: inline-block; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #fff; max-width: 220px; }
+.proof-thumb img { display: block; width: 100%; }

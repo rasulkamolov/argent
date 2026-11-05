@@ -5,6 +5,7 @@
  * re-checks on the server which branch the user may touch.
  */
 require_once __DIR__ . '/layout.php';
+require_once __DIR__ . '/proofs.php';
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
@@ -26,6 +27,9 @@ function safe_back(string $b, string $fallback = 'index.php'): string {
 function need_admin(string $back): void { if (!is_admin()) done($back, "Bu amal faqat administrator uchun.", 'error'); }
 
 /* ------------------------------------------------------------------ guards */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($_POST) && empty($_FILES) && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+    done(!empty($_SERVER['HTTP_REFERER']) ? basename(parse_url($_SERVER['HTTP_REFERER'], PHP_URL_PATH) ?: 'index.php') : 'index.php', "Yuborilgan fayl juda katta (serverda ruxsat etilganidan oshdi). Kichikroq rasm tanlang.", 'error');
+}
 $mutating = !in_array($action, ['switch_branch'], true);
 if ($mutating && $_SERVER['REQUEST_METHOD'] !== 'POST') done('index.php', "Noto'g'ri so'rov usuli.", 'error');
 if ($mutating && !csrf_valid()) done('index.php', "Sessiya muddati tugadi. Sahifani yangilab, qayta urinib ko'ring.", 'error');
@@ -84,12 +88,47 @@ if ($action === 'add_transaction') {
         if ($empName) $comment = trim($comment . " (Oylik: $empName)"); else $empId = null;
     }
     $in = $type === 'income' ? 1 : 0;
-    db()->prepare("INSERT INTO transactions (branch_id, user_id, category_id, employee_id, payment, cash, click, bank, cash_in, cash_out, comment, date)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-        ->execute([$bid, $meId, $catId ?: null, $empId, $payment, $method === 'cash' ? 1 : 0, $method === 'click' ? 1 : 0, $method === 'bank' ? 1 : 0, $in, 1 - $in, $comment, $date]);
+    // payment screenshot (Click / Bank only)
+    $proof = null;
+    if ($method !== 'cash') {
+        [$proof, $perr] = proof_save($_FILES['proof'] ?? null, $bid);
+        if ($perr) done('index.php', $perr, 'error');
+        if (!$proof && proof_required($bid)) done('index.php', "Click/Bank uchun to'lov skrinshotini biriktiring.", 'error');
+    }
+    db()->prepare("INSERT INTO transactions (branch_id, user_id, category_id, employee_id, payment, cash, click, bank, cash_in, cash_out, comment, date, proof)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        ->execute([$bid, $meId, $catId ?: null, $empId, $payment, $method === 'cash' ? 1 : 0, $method === 'click' ? 1 : 0, $method === 'bank' ? 1 : 0, $in, 1 - $in, $comment, $date, $proof]);
     $id = (int)db()->lastInsertId();
-    audit('tx.create', 'transaction', $id, ['amount' => $payment, 'type' => $type, 'method' => $method, 'date' => $date], $bid);
+    audit('tx.create', 'transaction', $id, ['amount' => $payment, 'type' => $type, 'method' => $method, 'date' => $date, 'proof' => (bool)$proof], $bid);
     done('index.php' . ($date !== date('Y-m-d') ? '?date=' . $date : ''), ($in ? "Kirim" : "Chiqim") . " saqlandi: " . ($in ? '+' : '−') . number_format($payment, 0, '.', ' '));
+}
+
+if ($action === 'attach_proof') {
+    $t = tx_authorized(pint('id'));
+    $back = $t ? 'index.php?date=' . urlencode($t['date']) : 'index.php';
+    if (!$t || $t['cash'] && !$t['click'] && !$t['bank']) done($back, "Tranzaksiya topilmadi yoki naqd (skrinshot kerak emas).", 'error');
+    $has = !empty($t['proof']);
+    if ($has && !(is_admin() || is_manager())) done($back, "Skrinshot allaqachon biriktirilgan. Almashtirish faqat menejer/administratorga ruxsat.", 'error');
+    [$new, $perr] = proof_save($_FILES['proof'] ?? null, (int)$t['branch_id']);
+    if ($perr || !$new) done($back, $perr ?: "Rasmni tanlang.", 'error');
+    db()->prepare("UPDATE transactions SET proof = ? WHERE id = ?")->execute([$new, $t['id']]);
+    db()->prepare("INSERT INTO transaction_history (transaction_id, user_id, field_name, old_value, new_value, changed_at) VALUES (?,?,?,?,?,datetime('now','localtime'))")
+        ->execute([$t['id'], $meId, 'Skrinshot', $has ? 'eski rasm' : "yo'q", $has ? 'almashtirildi' : 'biriktirildi']);
+    if ($has) proof_delete($t['proof']);
+    audit('tx.proof', 'transaction', (int)$t['id'], ['replaced' => $has], (int)$t['branch_id']);
+    done($back, $has ? "Skrinshot almashtirildi" : "Skrinshot biriktirildi");
+}
+if ($action === 'remove_proof') {
+    $t = tx_authorized(pint('id'));
+    $back = $t ? 'index.php?date=' . urlencode($t['date']) : 'index.php';
+    if (!$t || !(is_admin() || is_manager())) done($back, "Ruxsat yo'q.", 'error');
+    if (!empty($t['proof'])) {
+        db()->prepare("UPDATE transactions SET proof = NULL WHERE id = ?")->execute([$t['id']]);
+        db()->prepare("INSERT INTO transaction_history (transaction_id, user_id, field_name, old_value, new_value, changed_at) VALUES (?,?,?,?,?,datetime('now','localtime'))")->execute([$t['id'], $meId, 'Skrinshot', 'bor', "o'chirildi"]);
+        proof_delete($t['proof']);
+        audit('tx.proof_remove', 'transaction', (int)$t['id'], null, (int)$t['branch_id']);
+    }
+    done($back, "Skrinshot o'chirildi");
 }
 
 if ($action === 'delete_transaction') {
@@ -109,7 +148,7 @@ if ($action === 'restore_transaction') {
     $st->execute([pint('id')]); $log = $st->fetch();
     $snap = $log ? json_decode((string)$log['details'], true) : null;
     if (!is_array($snap) || empty($snap['branch_id'])) done('admin.php#journal', "Qaytarib bo'lmaydi.", 'error');
-    $cols = ['id','branch_id','user_id','category_id','employee_id','payment','cash','click','bank','cash_in','cash_out','comment','date','is_modified','created_at','ext_ref'];
+    $cols = ['id','branch_id','user_id','category_id','employee_id','payment','cash','click','bank','cash_in','cash_out','comment','date','is_modified','created_at','ext_ref','proof'];
     $exists = db()->prepare("SELECT COUNT(*) FROM transactions WHERE id = ?"); $exists->execute([$snap['id'] ?? 0]);
     if ($exists->fetchColumn()) unset($snap['id']);
     $use = array_values(array_filter($cols, function ($c) use ($snap) { return array_key_exists($c, $snap); }));
@@ -202,6 +241,7 @@ if (is_admin()) {
         if (mb_strtolower(pstr('confirm_name')) !== mb_strtolower($b['name'])) done($A . '#branches', "Tasdiqlash uchun filial nomini aynan yozing", 'error');
         $n = (int)db()->query("SELECT COUNT(*) FROM transactions WHERE branch_id = " . $id)->fetchColumn();
         $bk = db_backup('before_delete_branch');
+        foreach (db()->query("SELECT proof FROM transactions WHERE branch_id = $id AND proof IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $pf) proof_delete($pf);
         db()->beginTransaction();
         db()->exec("DELETE FROM transaction_history WHERE transaction_id IN (SELECT id FROM transactions WHERE branch_id = $id)");
         db()->exec("DELETE FROM transactions WHERE branch_id = $id");
@@ -218,7 +258,7 @@ if (is_admin()) {
     }
     if ($action === 'set_branch_setting') {
         $id = pint('branch_id'); $key = pstr('key');
-        if (!branch_get($id) || !in_array($key, ['staff_can_edit', 'staff_can_delete'], true)) done($A . '#branches', "Noto'g'ri so'rov", 'error');
+        if (!branch_get($id) || !in_array($key, ['staff_can_edit', 'staff_can_delete', 'require_proof'], true)) done($A . '#branches', "Noto'g'ri so'rov", 'error');
         if (pstr('value') === 'default') setting_clear($key, $id); else setting_set($key, pstr('value') === '1' ? '1' : '0', $id);
         audit('branch.setting', 'branch', $id, [$key => pstr('value')], $id);
         done($A . '#branches', "Filial ruxsati yangilandi");
@@ -314,7 +354,7 @@ if (is_admin()) {
     /* ---- settings, backup, sample data ---- */
     if ($action === 'update_setting') {
         $key = pstr('key');
-        if (in_array($key, ['staff_can_edit', 'staff_can_delete'], true)) {
+        if (in_array($key, ['staff_can_edit', 'staff_can_delete', 'require_proof'], true)) {
             setting_set($key, pstr('value') === '1' ? '1' : '0');
             audit('setting.update', 'setting', null, [$key => pstr('value')]);
             done($A . '#settings', "Ruxsat yangilandi");

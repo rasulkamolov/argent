@@ -22,10 +22,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $bid = (int)($_POST['branch_id'] ?? 0);
         if ($bid === 0 && $newName === '') imp_fail("Filialni tanlang yoki yangi filial nomini yozing.");
         if ($bid && !branch_get($bid)) imp_fail("Filial topilmadi.");
-        try { $rows = sqlimp_parse((string)file_get_contents($f['tmp_name'])); } catch (Throwable $e) { imp_fail("Faylni o'qib bo'lmadi: " . $e->getMessage()); }
-        if (!$rows) imp_fail("Faylda «transactions» jadvaliga INSERT topilmadi.");
         $tz = max(-12, min(14, (int)($_POST['tz'] ?? 5)));
-        $plan = sqlimp_plan($rows, $bid, ['tz_offset' => $tz, 'skip_empty' => !empty($_POST['skip_empty'])]);
+        if (dbimp_is_sqlite($f['tmp_name'])) {            // an old .db / .sqlite database file
+            try { $plan = dbimp_plan($f['tmp_name'], $bid, []); } catch (Throwable $e) { imp_fail("Baza faylini o'qib bo'lmadi: " . $e->getMessage()); }
+        } else {                                           // a phpMyAdmin .sql dump
+            try { $rows = sqlimp_parse((string)file_get_contents($f['tmp_name'])); } catch (Throwable $e) { imp_fail("Faylni o'qib bo'lmadi: " . $e->getMessage()); }
+            if (!$rows) imp_fail("Faylda «transactions» jadvaliga INSERT topilmadi. (.sql dump yoki SQLite .db/.sqlite fayl yuklang.)");
+            $plan = sqlimp_plan($rows, $bid, ['tz_offset' => $tz, 'skip_empty' => !empty($_POST['skip_empty'])]);
+        }
         $token = bin2hex(random_bytes(12));
         $meta = ['branch_id' => $bid, 'new_branch' => $bid ? '' : $newName, 'tz' => $tz, 'file' => basename((string)$f['name'])];
         file_put_contents($dir . "/imp_$token.json", json_encode(['plan' => $plan, 'meta' => $meta], JSON_UNESCAPED_UNICODE));
@@ -65,7 +69,7 @@ ui_start('admin');
 ?>
 <div class="page page-narrow">
   <a class="btn btn-ghost btn-sm" href="admin.php" style="margin-left:-8px;margin-bottom:8px"><?= icon('arrow-left', 'i-sm') ?> Admin panel</a>
-  <div class="page-head"><div><h1 class="page-title">Ma'lumot import</h1><p class="page-sub">phpMyAdmin (.sql) dump faylidan tranzaksiyalarni filialga yuklash</p></div></div>
+  <div class="page-head"><div><h1 class="page-title">Ma'lumot import</h1><p class="page-sub">SQL dump yoki eski baza faylidan tranzaksiyalarni filialga qo'shish (takrorlanmaydi)</p></div></div>
   <div class="steps" style="margin-bottom:16px">
     <span class="step <?= $step === 'upload' && !$result ? 'on' : 'done' ?>"><span class="n">1</span> Fayl</span>
     <span class="step <?= $step === 'preview' ? 'on' : ($result ? 'done' : '') ?>"><span class="n">2</span> Tekshirish</span>
@@ -128,10 +132,10 @@ ui_start('admin');
   <form action="import.php" method="post" enctype="multipart/form-data" class="card card-pad stack" data-loading>
     <?= csrf_field() ?><input type="hidden" name="step" value="preview">
     <label class="drop" id="drop">
-      <input type="file" name="dump" id="dumpFile" accept=".sql,text/plain,application/sql" required>
+      <input type="file" name="dump" id="dumpFile" accept=".sql,.db,.sqlite,.sqlite3,text/plain,application/sql,application/x-sqlite3,application/octet-stream" required>
       <span class="icon-tile primary" style="margin:0 auto 10px;width:52px;height:52px;border-radius:16px"><?= icon('upload', 'i-lg') ?></span>
-      <b id="dropName" style="display:block">.sql faylni tanlang yoki shu yerga tashlang</b>
-      <span class="fs-sm text-3">phpMyAdmin → Export → SQL. «transactions» jadvali (id, date, payment, cash, click, cash_in, cash_out, comment, entered_by, created_at).</span>
+      <b id="dropName" style="display:block">.sql yoki .db / .sqlite faylni tanlang (yoki shu yerga tashlang)</b>
+      <span class="fs-sm text-3"><b>SQL dump</b> (phpMyAdmin → Export) yoki <b>eski baza fayli</b> (<code>harvards_finance.sqlite</code> / <code>db.db</code>) — masalan, Oxford tarixini qayta tiklash uchun. Bazadagi mavjud yozuvlar takrorlanmaydi.</span>
     </label>
     <div class="field"><label class="label" for="ib">Qaysi filialga</label>
       <select class="select" name="branch_id" id="ib"><option value="0">➕ Yangi filial yaratish…</option><?php foreach ($branches as $b): ?><option value="<?= (int)$b['id'] ?>" <?= scope_branch() === (int)$b['id'] ? 'selected' : '' ?>><?= e($b['name']) ?></option><?php endforeach; ?></select></div>

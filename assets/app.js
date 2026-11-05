@@ -4,10 +4,9 @@
   var doc = document;
   var $ = function (s, r) { return (r || doc).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || doc).querySelectorAll(s)); };
-  var ICONS = (window.__ICONS || 'assets/icons.svg');
 
   function icon(name, cls) {
-    return '<svg class="i ' + (cls || '') + '" aria-hidden="true"><use href="' + ICONS + '#' + name + '"/></svg>';
+    return '<svg class="i ' + (cls || '') + '" aria-hidden="true"><use href="#' + name + '"/></svg>';
   }
 
   /* ---------- Toast ---------- */
@@ -106,7 +105,7 @@
   function closeMenu() { if (openMenu) { openMenu.pop.remove(); openMenu.btn.setAttribute('aria-expanded', 'false'); openMenu = null; } }
   doc.addEventListener('click', function (e) {
     var btn = e.target.closest('[data-menu]');
-    if (!btn) { if (!e.target.closest('.menu-pop')) closeMenu(); return; }
+    if (!btn) { if (!e.target.closest('.menu-pop')) closeMenu(); else if (e.target.closest('a,button')) setTimeout(closeMenu, 0); return; }
     e.preventDefault();
     if (openMenu && openMenu.btn === btn) { closeMenu(); return; }
     closeMenu();
@@ -194,6 +193,81 @@
   });
 
   /* ---------- Misc ---------- */
+  /* ---------- Payment proof drop zone: <div class="proof-drop" data-proof [data-required]> ---------- */
+  function fmtSize(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
+  // downscale big phone screenshots/photos before uploading (saves mobile data); falls back to the original file
+  function compressImage(file) {
+    return new Promise(function (resolve) {
+      if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return resolve(file);
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var w = img.naturalWidth, h = img.naturalHeight, sc = Math.min(1, 1600 / Math.max(w, h));
+        if (sc === 1 && file.size < 700 * 1024) { URL.revokeObjectURL(url); return resolve(file); }
+        var c = doc.createElement('canvas'); c.width = Math.round(w * sc); c.height = Math.round(h * sc);
+        var x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height);
+        c.toBlob(function (b) {
+          URL.revokeObjectURL(url);
+          if (!b || (sc === 1 && b.size >= file.size)) return resolve(file);
+          resolve(new File([b], (file.name || 'skrinshot').replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }));
+        }, 'image/jpeg', 0.86);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  }
+  function initProof(box) {
+    if (box._ready) return; box._ready = true;
+    var inp = $('input[type="file"]', box), empty = $('.pd-empty', box), prev = $('.pd-preview', box), img = $('img', prev), meta = $('.pd-meta', prev), clearBtn = $('[data-proof-clear]', box);
+    function show(f) {
+      if (!f) { prev.hidden = true; empty.hidden = false; if (img.src) URL.revokeObjectURL(img.src); img.removeAttribute('src'); box.classList.remove('need'); return; }
+      img.src = URL.createObjectURL(f); meta.innerHTML = '<b></b><span></span>'; meta.firstChild.textContent = f.name || 'skrinshot'; meta.lastChild.textContent = fmtSize(f.size) + ' · tayyor';
+      empty.hidden = true; prev.hidden = false; box.classList.remove('need');
+    }
+    function setFile(f) {
+      if (!f || !/^image\//.test(f.type)) { toast('Faqat rasm tanlang (JPG, PNG, WEBP)', 'error'); return; }
+      compressImage(f).then(function (g) {
+        try { var dt = new DataTransfer(); dt.items.add(g); inp.files = dt.files; } catch (e) { /* old browser: original file stays in the input */ }
+        show(g);
+      });
+    }
+    box.setFile = setFile;
+    box.addEventListener('click', function (e) { if (e.target.closest('[data-proof-clear]')) return; inp.click(); });
+    box.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inp.click(); } });
+    inp.addEventListener('click', function (e) { e.stopPropagation(); });
+    inp.addEventListener('change', function () { if (inp.files && inp.files[0]) setFile(inp.files[0]); });
+    ['dragenter', 'dragover'].forEach(function (ev) { box.addEventListener(ev, function (e) { e.preventDefault(); box.classList.add('over'); }); });
+    ['dragleave', 'drop'].forEach(function (ev) { box.addEventListener(ev, function (e) { e.preventDefault(); box.classList.remove('over'); }); });
+    box.addEventListener('drop', function (e) { if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
+    if (clearBtn) clearBtn.addEventListener('click', function (e) { e.stopPropagation(); try { inp.value = ''; } catch (x) {} show(null); });
+    box.reset = function () { try { inp.value = ''; } catch (x) {} show(null); };
+  }
+  window.initProof = initProof;
+  $$('[data-proof]').forEach(initProof);
+  // Ctrl+V / Cmd+V a screenshot straight into the visible drop zone
+  doc.addEventListener('paste', function (e) {
+    var items = (e.clipboardData || {}).items || [], file = null;
+    for (var i = 0; i < items.length; i++) if (items[i].kind === 'file' && /^image\//.test(items[i].type)) { file = items[i].getAsFile(); break; }
+    if (!file) return;
+    var box = $$('[data-proof]').filter(function (b) { return b.offsetParent !== null; })[0];
+    if (box && box.setFile) { e.preventDefault(); box.setFile(file); }
+  });
+  // required proof: block submit with a clear message
+  doc.addEventListener('submit', function (e) {
+    var f = e.target, box = $$('[data-proof][data-required]', f).filter(function (b) { return b.offsetParent !== null; })[0];
+    if (!box) return;
+    var inp = $('input[type="file"]', box);
+    if (!inp.files || !inp.files.length) { e.preventDefault(); box.classList.add('need'); box.scrollIntoView({ block: 'center', behavior: 'smooth' }); toast("To'lov skrinshotini biriktiring", 'error'); }
+  }, true);
+  // viewer
+  doc.addEventListener('click', function (e) {
+    var v = e.target.closest('[data-proof-view]'); if (!v) return;
+    e.preventDefault(); closeMenu();
+    var d = $('#proofDialog'); if (!d) return;
+    var src = 'proof.php?id=' + encodeURIComponent(v.getAttribute('data-proof-view'));
+    $('img', d).src = src; $('#proofOpen', d).href = src; openDialog(d);
+  });
+  var pdlg = $('#proofDialog'); if (pdlg) pdlg.addEventListener('close', function () { $('img', pdlg).removeAttribute('src'); });
+
   // Auto-grow textareas
   doc.addEventListener('input', function (e) {
     var t = e.target; if (t.matches && t.matches('textarea[data-autogrow]')) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, 260) + 'px'; }

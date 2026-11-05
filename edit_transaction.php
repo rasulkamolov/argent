@@ -94,5 +94,25 @@ ui_start('daily');
     </div>
     <p class="hint">Barcha o'zgarishlar «Tarix» bo'limida saqlanadi.</p>
   </form>
+
+  <?php if ($trans['click'] || $trans['bank']): $hasProof = !empty($trans['proof']); $mayReplace = is_admin() || is_manager(); ?>
+  <section class="card card-pad stack" style="margin-top:16px" aria-labelledby="prTitle">
+    <div class="row"><span class="icon-tile <?= $hasProof ? 'in' : 'out' ?>"><?= icon($hasProof ? 'image' : 'image-off') ?></span>
+      <div class="grow"><h2 class="card-title" id="prTitle">To'lov skrinshoti</h2><p class="fs-sm text-3"><?= $hasProof ? "Biriktirilgan — to'lov isboti sifatida saqlanadi" : "Hali biriktirilmagan" ?></p></div></div>
+    <?php if ($hasProof): ?>
+      <button type="button" class="proof-thumb" data-proof-view="<?= (int)$trans['id'] ?>" style="padding:0;cursor:zoom-in" aria-label="Skrinshotni kattalashtirish"><img src="proof.php?id=<?= (int)$trans['id'] ?>" alt="To'lov skrinshoti" loading="lazy"></button>
+    <?php endif; ?>
+    <?php if (!$hasProof || $mayReplace): ?>
+    <form action="process.php" method="post" enctype="multipart/form-data" class="stack" data-loading>
+      <?= csrf_field() ?><input type="hidden" name="action" value="attach_proof"><input type="hidden" name="id" value="<?= (int)$trans['id'] ?>">
+      <?= ui_proof_drop(true, 'proof') ?>
+      <button class="btn btn-primary" type="submit"><?= icon('image-plus', 'i-sm') ?> <?= $hasProof ? 'Almashtirish' : 'Biriktirish' ?></button>
+    </form>
+    <?php endif; ?>
+    <?php if ($hasProof && $mayReplace): ?>
+    <a class="btn btn-danger-soft btn-sm" data-post href="process.php?action=remove_proof&id=<?= (int)$trans['id'] ?>" data-confirm="Skrinshot o'chiriladi." data-confirm-title="Skrinshotni o'chirasizmi?" data-confirm-ok="O'chirish"><?= icon('trash-2', 'i-sm') ?> Skrinshotni o'chirish</a>
+    <?php endif; ?>
+  </section>
+  <?php endif; ?>
 </div>
 <?php ui_end(['active' => 'daily']);

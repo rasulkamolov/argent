@@ -1,14 +1,14 @@
 <?php defined('ADMIN_PAGE') || exit;
-$ge = setting('staff_can_edit', '1') === '1'; $gd = setting('staff_can_delete', '0') === '1';
+$ge = setting('staff_can_edit', '1') === '1'; $gd = setting('staff_can_delete', '0') === '1'; $gp = setting('require_proof', '1') === '1';
 $backups = array_reverse($bk); ?>
 <div class="grid lg-g-2">
   <section class="card card-pad stack" aria-labelledby="permTitle">
     <div class="row"><span class="icon-tile primary"><?= icon('shield-check') ?></span><div><h2 class="card-title" id="permTitle">Standart ruxsatlar (kassirlar)</h2><p class="fs-sm text-3">Filialda alohida belgilanmagan bo'lsa shu qo'llanadi</p></div></div>
-    <?php foreach ([['staff_can_edit', 'Tahrirlash', 'Kassir tranzaksiyani tahrirlay oladi', $ge], ['staff_can_delete', "O'chirish", "Kassir tranzaksiyani o'chira oladi", $gd]] as [$key, $ttl, $desc, $on]): ?>
+    <?php foreach ([['staff_can_edit', 'Tahrirlash', 'Kassir tranzaksiyani tahrirlay oladi', $ge], ['staff_can_delete', "O'chirish", "Kassir tranzaksiyani o'chira oladi", $gd], ['require_proof', 'Skrinshot majburiy', "Kassir Click/Bank kiritganda to'lov skrinshotini biriktirishi shart", $gp]] as [$key, $ttl, $desc, $on]): ?>
     <form action="process.php" method="post" class="row card-pad" style="border:1px solid var(--border);border-radius:14px;background:var(--surface-2)">
       <?= csrf_field() ?><input type="hidden" name="action" value="update_setting"><input type="hidden" name="key" value="<?= $key ?>"><input type="hidden" name="value" value="<?= $on ? 1 : 0 ?>">
-      <div class="grow"><div class="fw-7"><?= e($ttl) ?> ruxsati</div><div class="fs-sm text-3"><?= e($desc) ?></div></div>
-      <label class="switch"><input type="checkbox" role="switch" <?= $on ? 'checked' : '' ?> data-autosubmit aria-label="<?= e($ttl) ?> ruxsati"><i></i></label>
+      <div class="grow"><div class="fw-7"><?= e($ttl) ?><?= $key === 'require_proof' ? '' : ' ruxsati' ?></div><div class="fs-sm text-3"><?= e($desc) ?></div></div>
+      <label class="switch"><input type="checkbox" role="switch" <?= $on ? 'checked' : '' ?> data-autosubmit aria-label="<?= e($ttl) ?>"><i></i></label>
     </form>
     <?php endforeach; ?>
     <p class="hint">Menejer va administrator har doim tahrirlay va o'chira oladi. Har bir filial uchun alohida qoida «Filiallar» bo'limida.</p>

@@ -1,6 +1,6 @@
 <?php
 /**
- * Command-line import:  php tools/import_cli.php dump.sql "Branch name" [--create-branch] [--tz=5] [--dry]
+ * Command-line import (SQL dump or old .db/.sqlite file):  php tools/import_cli.php dump.sql "Branch name" [--create-branch] [--tz=5] [--dry]
  * Creates the branch if --create-branch is given and it doesn't exist. Prints new cashier passwords once.
  */
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit; }
@@ -17,8 +17,8 @@ if (!$bid && $create && !$dry) {
     $bid = (int)db()->lastInsertId(); branches_all(true); echo "Branch created: #$bid $bname\n";
 }
 if (!$bid && !$dry) { fwrite(STDERR, "Branch not found: $bname (use --create-branch)\n"); exit(1); }
-$rows = sqlimp_parse(file_get_contents($file));
-$plan = sqlimp_plan($rows, $bid, ['tz_offset' => $tz]);
+if (dbimp_is_sqlite($file)) { $plan = dbimp_plan($file, $bid); }
+else { $rows = sqlimp_parse(file_get_contents($file)); $plan = sqlimp_plan($rows, $bid, ['tz_offset' => $tz]); }
 printf("Source rows: %d | to import: %d (income %d = %s, expense %d = %s) | empty skipped: %d | already imported: %d | %s .. %s\n",
     $plan['source_rows'], count($plan['items']), $plan['income_n'], number_format($plan['income_sum'], 0, '.', ' '), $plan['expense_n'], number_format($plan['expense_sum'], 0, '.', ' '),
     $plan['skipped_empty'], $plan['duplicates'], $plan['date_min'], $plan['date_max']);

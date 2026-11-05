@@ -77,7 +77,17 @@ function asset(string $path): string {
     return $path . (is_file($f) ? '?v=' . filemtime($f) : '');
 }
 function icon(string $name, string $cls = ''): string {
-    return '<svg class="i ' . e($cls) . '" aria-hidden="true"><use href="assets/icons.svg#' . e($name) . '"/></svg>';
+    return '<svg class="i ' . e($cls) . '" aria-hidden="true"><use href="#' . e($name) . '"/></svg>';
+}
+/** The whole icon sheet is embedded in every page (no separate file => nothing to cache wrongly). */
+function icon_sprite(): string {
+    static $svg = null;
+    if ($svg === null) {
+        $f = __DIR__ . '/assets/icons.svg';
+        $raw = is_file($f) ? (string)file_get_contents($f) : '';
+        $svg = str_replace('<svg xmlns="http://www.w3.org/2000/svg" style="display:none">', '<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">', $raw);
+    }
+    return $svg;
 }
 /** Coloured rounded-square avatar with the branch initials. $b = null -> "all branches". */
 function branch_avatar(?array $b, string $size = ''): string {
@@ -148,6 +158,15 @@ function ui_back_param(): string {
     $file = basename(parse_url($uri, PHP_URL_PATH) ?: 'index.php');
     $qs = parse_url($uri, PHP_URL_QUERY);
     return rawurlencode($file . ($qs ? '?' . $qs : ''));
+}
+
+/** Drop / paste / pick zone for a payment screenshot. */
+function ui_proof_drop(bool $required = false, string $name = 'proof', string $id = ''): string {
+    return '<div class="proof-drop" data-proof' . ($required ? ' data-required' : '') . ($id ? ' id="' . e($id) . '"' : '') . ' tabindex="0" role="button" aria-label="Skrinshot biriktirish">'
+        . '<input type="file" name="' . e($name) . '" accept="image/*" tabindex="-1">'
+        . '<div class="pd-empty"><span class="pd-ic">' . icon('image-plus') . '</span><b>Skrinshotni shu yerga tashlang</b><small>yoki bosib rasm tanlang · Ctrl+V bilan qo\'ying</small></div>'
+        . '<div class="pd-preview" hidden><img alt=""><div class="pd-meta"></div><button type="button" class="btn btn-ghost btn-icon btn-sm" data-proof-clear aria-label="Rasmni olib tashlash">' . icon('x', 'i-sm') . '</button></div>'
+        . '</div>';
 }
 
 /** Branch badge. Admin: opens the switch dialog. Others: static label. */
@@ -253,8 +272,18 @@ function ui_footer(array $o = []): void {
     </div>
   </div>
 </dialog>
+<?php if (auth_user()): ?>
+<dialog class="modal" id="proofDialog" aria-labelledby="pvTitle">
+  <div class="modal-box">
+    <div class="modal-head"><h2 class="modal-title" id="pvTitle">To'lov skrinshoti</h2><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Yopish"><?= icon('x') ?></button></div>
+    <img alt="To'lov skrinshoti">
+    <div class="row gap-2 mt-3" style="justify-content:flex-end"><a class="btn btn-sm" id="proofOpen" href="#" target="_blank" rel="noopener"><?= icon('external-link', 'i-sm') ?> Yangi oynada ochish</a></div>
+  </div>
+</dialog>
+<?php endif; ?>
 <div class="toasts" id="toasts" aria-live="polite"></div>
-<script>window.__ICONS='assets/icons.svg';<?= $flash ? 'window.__flash=' . json_encode($flash, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) . ';' : '' ?></script>
+<?= icon_sprite() ?>
+<script><?= $flash ? 'window.__flash=' . json_encode($flash, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) . ';' : '' ?></script>
 <script src="<?= e(asset('assets/app.js')) ?>"></script>
 <?= $o['scripts'] ?? '' ?>
 </body>
@@ -284,7 +313,8 @@ function ui_scope_chip(?int $branchId = null): string {
 function journal_meta(string $a): array {
     $m = [
         'login' => ['Tizimga kirdi', 'log-in', 'primary'], 'logout' => ['Tizimdan chiqdi', 'log-out', ''],
-        'tx.create' => ["Tranzaksiya qo'shildi", 'plus', 'in'], 'tx.update' => ['Tranzaksiya tahrirlandi', 'pencil', 'warn'],
+        'tx.create' => ["Tranzaksiya qo'shildi", 'plus', 'in'],
+        'tx.proof' => ['Skrinshot biriktirildi', 'image-plus', 'primary'], 'tx.proof_remove' => ["Skrinshot o'chirildi", 'image-off', 'warn'], 'tx.update' => ['Tranzaksiya tahrirlandi', 'pencil', 'warn'],
         'tx.delete' => ["Tranzaksiya o'chirildi", 'trash-2', 'danger'], 'tx.delete_restored' => ["Tranzaksiya o'chirilgan (qaytarilgan)", 'undo-2', ''],
         'tx.restore' => ['Tranzaksiya qaytarildi', 'undo-2', 'in'],
         'branch.create' => ['Filial yaratildi', 'store', 'in'], 'branch.update' => ['Filial tahrirlandi', 'store', 'warn'],
