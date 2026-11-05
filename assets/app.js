@@ -1,4 +1,4 @@
-/* OXFORD Moliyaviy hisob — shared UI behaviour (no dependencies) */
+/* OXFORD multi-branch — shared UI behaviour (no dependencies) */
 (function () {
   'use strict';
   var doc = document;
@@ -8,30 +8,6 @@
 
   function icon(name, cls) {
     return '<svg class="i ' + (cls || '') + '" aria-hidden="true"><use href="' + ICONS + '#' + name + '"/></svg>';
-  }
-
-  /* ---------- Theme ---------- */
-  function currentTheme() {
-    var t = doc.documentElement.getAttribute('data-theme');
-    if (t) return t;
-    return window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
-  function applyTheme(t) {
-    doc.documentElement.setAttribute('data-theme', t);
-    try { localStorage.setItem('theme', t); } catch (e) {}
-    $$('meta[name="theme-color"]').forEach(function (m) { m.setAttribute('content', t === 'dark' ? '#171a23' : '#ffffff'); });
-    $$('[data-theme-toggle]').forEach(function (b) { b.setAttribute('aria-pressed', t === 'dark'); });
-    window.dispatchEvent(new CustomEvent('themechange', { detail: t }));
-  }
-  doc.addEventListener('click', function (e) {
-    var b = e.target.closest('[data-theme-toggle]');
-    if (b) applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
-  });
-  if (window.matchMedia) {
-    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
-      var stored = null; try { stored = localStorage.getItem('theme'); } catch (e) {}
-      if (!stored) window.dispatchEvent(new CustomEvent('themechange'));
-    });
   }
 
   /* ---------- Toast ---------- */
@@ -81,9 +57,27 @@
     ok.className = 'btn ' + (el.dataset.confirmTone === 'primary' ? 'btn-primary' : 'btn-danger');
     pendingConfirm = el; openDialog(dlg);
   }, true);
+  /* ---------- POST links (CSRF-protected): <a data-post href="process.php?action=x&id=1"> ---------- */
+  function csrf() { var m = $('meta[name="csrf-token"]'); return m ? m.getAttribute('content') : ''; }
+  function postTo(href) {
+    var u = new URL(href, window.location.href), f = doc.createElement('form');
+    f.method = 'post'; f.action = u.origin + u.pathname; f.style.display = 'none';
+    function add(k, v) { var i = doc.createElement('input'); i.type = 'hidden'; i.name = k; i.value = v; f.appendChild(i); }
+    u.searchParams.forEach(function (v, k) { add(k, v); });
+    add('_csrf', csrf());
+    doc.body.appendChild(f); f.submit();
+  }
+  window.postTo = postTo;
+  doc.addEventListener('click', function (e) {
+    var a = e.target.closest('a[data-post]');
+    if (!a || a.hasAttribute('data-confirm')) return;      // confirm flow handles those
+    e.preventDefault(); postTo(a.href);
+  });
+
   function go(el) {
     el.dataset.confirmed = '1';
-    if (el.tagName === 'A') { window.location.href = el.href; }
+    if (el.tagName === 'A' && el.hasAttribute('data-post')) { postTo(el.href); }
+    else if (el.tagName === 'A') { window.location.href = el.href; }
     else if (el.form) { el.form.requestSubmit ? el.form.requestSubmit(el.type === 'submit' ? el : undefined) : el.form.submit(); }
     else el.click();
   }

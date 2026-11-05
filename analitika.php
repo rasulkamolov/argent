@@ -1,14 +1,14 @@
 <?php
-require_once 'db.php';
-require_once 'layout.php';
-require_once 'report_lib.php';
-require_admin();
+require_once __DIR__ . '/layout.php';
+require_once __DIR__ . '/report_lib.php';
+require_reports();
 
 $f = rl_filters();
 $cur = rl_totals($conn, $f);
 [$ps, $pe, $days] = rl_prev_range($f);
 $prev = rl_totals($conn, $f, $ps, $pe);
 $daily = rl_daily($conn, $f);
+$monthly = rl_monthly($conn, $f, 12);
 $in = $cur['in']; $out = $cur['out']; $net = $cur['net'];
 $active_days = max(1, count($daily));
 $margin = $in > 0 ? $net / $in * 100 : 0;
@@ -55,7 +55,8 @@ $labels = array_map(fn($d) => date('d.m', strtotime($d['date'])), $daily);
 $dinc = array_map(fn($d) => (float)$d['inc'], $daily);
 $dexp = array_map(fn($d) => (float)$d['exp'], $daily);
 $cum = []; $run = 0; foreach ($daily as $d) { $run += $d['inc'] - $d['exp']; $cum[] = $run; }
-$payload = ['labels' => $labels, 'inc' => $dinc, 'exp' => $dexp, 'cum' => $cum,
+$payload = ['month' => ['labels' => array_map(function ($m) { return uz_month((int)substr($m['ym'], 5, 2), true) . ' ' . substr($m['ym'], 2, 2); }, $monthly), 'inc' => array_map(function ($m) { return round($m['inc']); }, $monthly), 'exp' => array_map(function ($m) { return round($m['exp']); }, $monthly), 'net' => array_map(function ($m) { return round($m['inc'] - $m['exp']); }, $monthly)],
+    'labels' => $labels, 'inc' => $dinc, 'exp' => $dexp, 'cum' => $cum,
     'wd' => ['labels' => $wd_labels, 'inc' => $wd_avg_in, 'exp' => $wd_avg_out],
     'xc' => ['labels' => $xc_labels, 'series' => $xc_series]];
 
@@ -68,7 +69,7 @@ ui_start('analytics');
 ?>
 <div class="page">
   <div class="page-head">
-    <div><h1 class="page-title">Grafik analitika</h1><p class="page-sub"><?= e($range_label) ?> · <?= $days ?> kun</p></div>
+    <div><h1 class="page-title">Grafik analitika</h1><p class="page-sub row row-wrap" style="gap:8px"><?= ui_scope_chip((int)$f['branch']) ?><span><?= e($range_label) ?> · <?= $days ?> kun</span></p></div>
     <div class="row gap-2 no-print">
       <button class="btn" type="button" onclick="window.print()"><?= icon('printer', 'i-sm') ?> <span class="hide-sm">Chop etish</span></button>
       <a class="btn btn-success" href="export_excel.php?<?= e($qs) ?>"><?= icon('download', 'i-sm') ?> Excel (CSV)</a>
@@ -122,6 +123,18 @@ ui_start('analytics');
           </tbody></table>
         </div>
       </details>
+    </div>
+  </section>
+
+  <!-- Monthly -->
+  <section class="card" style="margin-top:16px" aria-labelledby="moTitle">
+    <div class="card-head"><h2 class="card-title" id="moTitle"><?= icon('calendar-range', 'i-sm') ?> Oylik dinamika (12 oy)</h2><span class="fs-sm text-3 hide-sm">tanlangan davr oxirigacha</span></div>
+    <div class="card-pad">
+      <div class="chart-box"><canvas id="monthChart" role="img" aria-label="Oylik kirim, chiqim va sof foyda grafigi. Ma'lumotlar quyidagi jadvalda."></canvas></div>
+      <details class="data-table mt-3 no-print"><summary><?= icon('list', 'i-sm') ?> Jadval ko'rinishi</summary>
+        <div class="table-scroll" style="margin-top:8px;border:1px solid var(--border);border-radius:12px"><table class="table"><thead><tr><th>Oy</th><th class="r">Kirim</th><th class="r">Chiqim</th><th class="r">Foyda</th><th class="r">Yozuvlar</th></tr></thead><tbody>
+        <?php foreach (array_reverse($monthly) as $m): ?><tr><td><?= e(uz_month((int)substr($m['ym'], 5, 2)) . ' ' . substr($m['ym'], 0, 4)) ?></td><td class="r num"><?= fmt($m['inc']) ?></td><td class="r num"><?= fmt($m['exp']) ?></td><td class="r num"><?= e(fmt_signed($m['inc'] - $m['exp'])) ?></td><td class="r num"><?= fmt($m['n']) ?></td></tr><?php endforeach; ?>
+        </tbody></table></div></details>
     </div>
   </section>
 
@@ -229,11 +242,8 @@ $js = '<script>
 (function(){
   if(!window.Chart || !document.getElementById("trendChart")) return;
   var D = ' . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) . ';
-  var PAL = {
-    light: { inc:"#1baf7a", exp:"#eb6834", line:"#2a78d6", cash:"#eda100", click:"#2a78d6", bank:"#e87ba4" },
-    dark:  { inc:"#199e70", exp:"#d95926", line:"#3987e5", cash:"#c98500", click:"#3987e5", bank:"#d55181" }
-  };
-  function theme(){ var t=document.documentElement.getAttribute("data-theme"); if(t) return t; return matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"; }
+  var PAL = { light: { inc:"#1baf7a", exp:"#eb6834", line:"#2a78d6", cash:"#eda100", click:"#2a78d6", bank:"#e87ba4" } };
+  function theme(){ return "light"; }
   function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
   function nf(n){ return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g," "); }
   function short(n){ var a=Math.abs(n), s=n<0?"−":""; if(a>=1e9) return s+(a/1e9).toFixed(1).replace(/\.0$/,"")+" mlrd"; if(a>=1e6) return s+(a/1e6).toFixed(1).replace(/\.0$/,"")+" mln"; if(a>=1e3) return s+(a/1e3).toFixed(0)+" ming"; return s+nf(a); }
@@ -266,6 +276,13 @@ $js = '<script>
         { label:"Jamlanma sof foyda", data:D.cum, borderColor:P.line, backgroundColor:P.line, borderWidth:2.5, pointRadius:D.labels.length>40?0:3, pointHoverRadius:6, pointBackgroundColor:P.line, pointBorderColor:surface, pointBorderWidth:2, tension:.25 } ] }, options:o }));
     }
 
+    // monthly (bars in/out) + net line on the same axis
+    var mo = base(); mo.scales.y.beginAtZero = false;
+    charts.push(new Chart(document.getElementById("monthChart"), { data:{ labels:D.month.labels, datasets:[
+      { type:"bar", label:"Kirim", data:D.month.inc, backgroundColor:P.inc, borderRadius:{topLeft:4,topRight:4}, maxBarThickness:26, borderColor:surface, borderWidth:{left:1,right:1} },
+      { type:"bar", label:"Chiqim", data:D.month.exp, backgroundColor:P.exp, borderRadius:{topLeft:4,topRight:4}, maxBarThickness:26, borderColor:surface, borderWidth:{left:1,right:1} },
+      { type:"line", label:"Sof foyda", data:D.month.net, borderColor:P.line, backgroundColor:P.line, borderWidth:2.5, pointRadius:3.5, pointHoverRadius:6, pointBackgroundColor:P.line, pointBorderColor:surface, pointBorderWidth:2, tension:.25 } ] }, options:mo }));
+
     // weekday
     var w = base(); w.interaction = { mode:"index", intersect:false };
     charts.push(new Chart(document.getElementById("wdChart"), { type:"bar", data:{ labels:D.wd.labels, datasets:[
@@ -289,7 +306,6 @@ $js = '<script>
     document.getElementById("trendChart").setAttribute("aria-label", mode==="daily" ? "Kunlik kirim va chiqim grafigi" : "Jamlanma sof foyda grafigi");
     build();
   });
-  window.addEventListener("themechange", build);
   window.addEventListener("beforeprint", function(){ charts.forEach(function(c){ c.resize(); }); });
   build();
 })();

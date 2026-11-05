@@ -1,8 +1,7 @@
 <?php
-require_once 'db.php';
-require_once 'layout.php';
-require_once 'report_lib.php';
-require_admin();
+require_once __DIR__ . '/layout.php';
+require_once __DIR__ . '/report_lib.php';
+require_reports();
 
 $f = rl_filters();
 $tab = in_array($_GET['tab'] ?? 'all', ['all', 'income', 'expense'], true) ? ($_GET['tab'] ?? 'all') : 'all';
@@ -15,6 +14,8 @@ $prev = rl_totals($conn, $f, $ps, $pe);
 $cat_in = rl_by_category($conn, $f, 'in');
 $cat_out = rl_by_category($conn, $f, 'out');
 $daily = array_reverse(rl_daily($conn, $f));
+$multi = is_admin() && !$f['branch'];                       // admin looking at every branch
+$by_branch = $multi ? rl_by_branch($conn, $f) : [];
 
 // transactions list (paged in SQL)
 [$w, $p] = rl_where($f);
@@ -41,7 +42,7 @@ ui_start('reports');
   <div class="page-head">
     <div>
       <h1 class="page-title">Hisobotlar</h1>
-      <p class="page-sub"><?= e($range_label) ?> · <?= $days ?> kun</p>
+      <p class="page-sub row row-wrap" style="gap:8px"><?= ui_scope_chip((int)$f['branch']) ?><span><?= e($range_label) ?> · <?= $days ?> kun</span></p>
     </div>
     <div class="row gap-2 no-print row-wrap">
       <button class="btn" type="button" onclick="window.print()"><?= icon('printer', 'i-sm') ?> <span class="hide-sm">Chop etish</span></button>
@@ -75,6 +76,30 @@ ui_start('reports');
       <div class="kpi-foot"><?= $cur['n_in'] ?> kirim · <?= $cur['n_out'] ?> chiqim · o'rtacha kirim <?= $cur['n_in'] ? fmt_short($in / $cur['n_in']) : '0' ?></div>
     </div>
   </section>
+
+  <?php if ($multi && $by_branch): $bmax = max(1, max(array_map(function ($r) { return $r['inc']; }, $by_branch))); ?>
+  <!-- By branch -->
+  <section class="card clip" style="margin-top:16px" aria-labelledby="bbT">
+    <div class="card-head"><h2 class="card-title" id="bbT"><?= icon('store', 'i-sm') ?> Filiallar bo'yicha</h2><a class="btn btn-ghost btn-sm" href="filiallar.php?<?= e($qs_base) ?>">Taqqoslash <?= icon('arrow-right', 'i-xs') ?></a></div>
+    <div class="table-wrap">
+      <table class="table table-stack">
+        <thead><tr><th>Filial</th><th class="r">Kirim</th><th class="r">Chiqim</th><th class="r">Foyda</th><th class="r">Yozuvlar</th><th style="min-width:150px">Kirim ulushi</th></tr></thead>
+        <tbody>
+        <?php foreach ($by_branch as $bid => $r): $bb = branch_get($bid); $net_b = $r['inc'] - $r['exp']; $sh = $in > 0 ? $r['inc'] / $in * 100 : 0; ?>
+          <tr>
+            <td class="cell-title"><a class="row gap-2" href="hisobot.php?<?= e(rl_qs($f, ['branch' => $bid])) ?>"><?= branch_avatar($bb, 'sm') ?><b><?= e($bb['name'] ?? '—') ?></b></a></td>
+            <td class="r text-in num fw-6" data-label="Kirim">+<?= fmt($r['inc']) ?></td>
+            <td class="r text-out num fw-6" data-label="Chiqim">−<?= fmt($r['exp']) ?></td>
+            <td class="r num fw-8 <?= $net_b < 0 ? 'text-out' : '' ?>" data-label="Foyda"><?= e(fmt_signed($net_b)) ?></td>
+            <td class="r num" data-label="Yozuvlar"><?= fmt($r['n_in'] + $r['n_out']) ?></td>
+            <td data-label="Ulush"><div class="bar-cell"><div class="bar bar-thin" style="--x:1"><i style="width:<?= round($sh, 1) ?>%;background:<?= e(branch_color($bb)) ?>"></i></div><span class="fs-xs fw-7 num" style="width:38px;text-align:right"><?= round($sh) ?>%</span></div></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <?php endif; ?>
 
   <!-- Payment methods -->
   <section class="card clip" style="margin-top:16px" aria-labelledby="mTitle">
@@ -155,11 +180,12 @@ ui_start('reports');
     <?php if ($rows): ?>
     <div class="table-wrap">
       <table class="table table-tx">
-        <thead><tr><th>Sana</th><th>Kategoriya</th><th>Izoh</th><th>Usul</th><th>Kiritdi</th><th class="r">Summa</th></tr></thead>
+        <thead><tr><th>Sana</th><?php if ($multi): ?><th>Filial</th><?php endif; ?><th>Kategoriya</th><th>Izoh</th><th>Usul</th><th>Kiritdi</th><th class="r">Summa</th></tr></thead>
         <tbody>
         <?php foreach ($rows as $r): $is_in = $r['cash_in'] == 1; $m = method_of($r); $mm = method_meta($m); ?>
           <tr>
             <td class="c-date nowrap num"><?= e(date('d.m.Y', strtotime($r['date']))) ?></td>
+            <?php if ($multi): $rb = branch_get((int)$r['branch_id']); ?><td class="c-branch"><span class="row gap-1" style="gap:6px"><?= branch_avatar($rb, 'xs') ?><span class="fs-sm fw-6"><?= e($rb['name'] ?? '—') ?></span></span></td><?php endif; ?>
             <td class="c-cat"><span class="cat-cell"><span class="icon-tile <?= $is_in ? 'in' : 'out' ?>"><?= icon($is_in ? 'arrow-down-left' : 'arrow-up-right') ?></span><span><?= e($r['cat'] ?: ($is_in ? 'Kirim' : 'Chiqim')) ?></span></span></td>
             <td class="c-break"></td>
             <td class="c-note"><?= linkify($r['comment']) ?></td>

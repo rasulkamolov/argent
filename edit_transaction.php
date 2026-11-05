@@ -1,34 +1,27 @@
 <?php
-require_once 'db.php';
-require_once 'layout.php';
+require_once __DIR__ . '/layout.php';
 require_login();
 
-if ($_SESSION['role'] !== 'admin') {
-    $can_edit = $conn->query("SELECT value FROM settings WHERE key='staff_can_edit'")->fetchColumn();
-    if ($can_edit === '0') {
-        flash_set('error', "Tahrirlash uchun ruxsat yo'q. Admin tahrirlashni o'chirib qo'ygan.");
-        header("Location: index.php"); exit();
-    }
+$id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
+$trans = tx_authorized($id);
+if (!$trans) { flash_set('error', "Tranzaksiya topilmadi yoki sizga ruxsat yo'q."); header("Location: index.php"); exit(); }
+if (!can_edit_tx((int)$trans['branch_id'])) {
+    flash_set('error', "Tahrirlash uchun ruxsat yo'q. Administrator tahrirlashni o'chirib qo'ygan.");
+    header("Location: index.php?date=" . urlencode($trans['date'])); exit();
 }
 
-$id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
-$t = $conn->prepare("SELECT t.*, c.name AS category_name FROM transactions t LEFT JOIN categories c ON t.category_id = c.id WHERE t.id = ?");
-$t->execute([$id]);
-$trans = $t->fetch(PDO::FETCH_ASSOC);
-if (!$trans) { flash_set('error', "Tranzaksiya topilmadi"); header("Location: index.php"); exit(); }
-
 $is_in = $trans['cash_in'] == 1;
-$cats = $conn->prepare("SELECT * FROM categories WHERE type = ? ORDER BY name");
-$cats->execute([$is_in ? 'income' : 'expense']);
-$cats = $cats->fetchAll(PDO::FETCH_ASSOC);
+$cats = array_values(array_filter(categories_for_branch((int)$trans['branch_id']), function ($c) use ($is_in) { return $c['type'] === ($is_in ? 'income' : 'expense'); }));
 $curMethod = method_of($trans);
 $back = 'index.php?date=' . urlencode($trans['date']);
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    if (!csrf_valid()) { flash_set('error', "Sessiya muddati tugadi, qayta urinib ko'ring."); header("Location: edit_transaction.php?id=$id"); exit(); }
     $pay = floatval(preg_replace('/[^\d.]/', '', (string)($_POST['payment'] ?? '')));
     $com = trim($_POST['comment'] ?? '');
     $method = in_array($_POST['method'] ?? '', ['cash', 'click', 'bank'], true) ? $_POST['method'] : 'cash';
     $cat = (int)($_POST['category_id'] ?? 0) ?: null;
+    if ($cat && !in_array($cat, array_map('intval', array_column($cats, 'id')), true)) $cat = null;
     if ($pay <= 0) { flash_set('error', "Summani kiriting"); header("Location: edit_transaction.php?id=$id"); exit(); }
 
     $log = function ($field, $old, $new) use ($conn, $id) {
@@ -47,6 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if ($changed) {
         $conn->prepare("UPDATE transactions SET payment=?, comment=?, cash=?, click=?, bank=?, category_id=?, is_modified=1 WHERE id=?")
              ->execute([$pay, $com, $method == 'cash' ? 1 : 0, $method == 'click' ? 1 : 0, $method == 'bank' ? 1 : 0, $cat, $id]);
+        audit('tx.update', 'transaction', $id, ['amount' => $pay, 'method' => $method], (int)$trans['branch_id']);
         flash_set('ok', "O'zgarishlar saqlandi");
     }
     header("Location: $back"); exit();
@@ -60,12 +54,13 @@ ui_start('daily');
   <div class="page-head">
     <div>
       <h1 class="page-title">Tranzaksiyani tahrirlash</h1>
-      <p class="page-sub"><?= e(uz_weekday($trans['date'])) ?>, <?= e(uz_date($trans['date'])) ?> · <span class="badge <?= $is_in ? 'badge-in' : 'badge-out' ?>"><?= $is_in ? 'Kirim' : 'Chiqim' ?></span></p>
+      <p class="page-sub row row-wrap" style="gap:8px"><?= ui_scope_chip((int)$trans['branch_id']) ?><?= e(uz_weekday($trans['date'])) ?>, <?= e(uz_date($trans['date'])) ?> · <span class="badge <?= $is_in ? 'badge-in' : 'badge-out' ?>"><?= $is_in ? 'Kirim' : 'Chiqim' ?></span></p>
     </div>
     <a class="btn btn-sm" href="view_history.php?id=<?= $id ?>"><?= icon('history', 'i-sm') ?> Tarix</a>
   </div>
 
   <form method="post" class="card card-pad stack" data-loading>
+    <?= csrf_field() ?>
     <input type="hidden" name="id" value="<?= $id ?>">
     <div class="field">
       <label class="label" for="payInput">Summa</label>

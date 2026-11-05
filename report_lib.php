@@ -5,7 +5,7 @@
  * Requires layout.php to be loaded first.
  */
 
-const RL_METHOD_SQL = "CASE WHEN t.bank=1 THEN 'bank' WHEN t.click=1 THEN 'click' ELSE 'cash' END";
+const RL_METHOD_SQL = SQL_METHOD;
 
 function rl_presets(): array {
     $today = date('Y-m-d');
@@ -27,8 +27,15 @@ function rl_filters(): array {
     if ($start > $end) { [$start, $end] = [$end, $start]; }
     if (strtotime($end) - strtotime($start) > 366 * 5 * 86400) { $start = date('Y-m-d', strtotime("$end -5 years")); }
     $method = in_array($_GET['method'] ?? '', ['cash', 'click', 'bank'], true) ? $_GET['method'] : '';
+    // branch: admin may pick any (0 = all); everyone else is locked to their own branch
+    if (is_admin()) {
+        $branch = isset($_GET['branch']) ? (int)$_GET['branch'] : scope_branch();
+        if ($branch && !branch_get($branch)) $branch = 0;
+    } else {
+        $branch = scope_branch();
+    }
     return [
-        'start' => $start, 'end' => $end, 'method' => $method,
+        'start' => $start, 'end' => $end, 'method' => $method, 'branch' => $branch,
         'cat' => (int)($_GET['cat'] ?? 0), 'user' => (int)($_GET['user'] ?? 0),
         'q' => trim($_GET['q'] ?? ''),
     ];
@@ -37,6 +44,9 @@ function rl_filters(): array {
 /** WHERE fragment (aliased table `t`) + params for the given range (defaults to the filter's own). */
 function rl_where(array $f, ?string $start = null, ?string $end = null): array {
     $w = ["t.date BETWEEN ? AND ?"]; $p = [$start ?? $f['start'], $end ?? $f['end']];
+    $ids = !empty($f['branch']) ? [(int)$f['branch']] : visible_branch_ids();
+    if (!is_admin() && !empty($f['branch']) && !in_array((int)$f['branch'], visible_branch_ids(), true)) $ids = visible_branch_ids();
+    $w[] = $ids ? "t.branch_id IN (" . implode(',', array_map('intval', $ids)) . ")" : "0";
     if ($f['method'] === 'bank')  $w[] = "t.bank = 1";
     if ($f['method'] === 'click') $w[] = "t.click = 1 AND t.bank = 0";
     if ($f['method'] === 'cash')  $w[] = "t.bank = 0 AND t.click = 0";
@@ -49,7 +59,7 @@ function rl_where(array $f, ?string $start = null, ?string $end = null): array {
 /** Query string for links, keeping all filters; $over replaces / removes (null) keys. */
 function rl_qs(array $f, array $over = []): string {
     $q = array_merge(array_filter([
-        'start' => $f['start'], 'end' => $f['end'], 'method' => $f['method'],
+        'start' => $f['start'], 'end' => $f['end'], 'method' => $f['method'], 'branch' => is_admin() ? (int)$f['branch'] : null,
         'cat' => $f['cat'] ?: null, 'user' => $f['user'] ?: null, 'q' => $f['q'] !== '' ? $f['q'] : null,
     ], fn($v) => $v !== null && $v !== ''), $over);
     return http_build_query(array_filter($q, fn($v) => $v !== null && $v !== ''));
@@ -108,12 +118,13 @@ function rl_delta_html(array $d, string $label = ''): string {
 }
 
 /** Filter bar (presets + date range + advanced filters). */
-function rl_render_filters(PDO $conn, array $f, string $action, array $hidden = [], bool $withSearch = true): void {
+function rl_render_filters(PDO $conn, array $f, string $action, array $hidden = [], bool $withSearch = true, bool $withBranch = true, bool $withAdv = true): void {
     $presets = rl_presets();
     $active = 'custom';
     foreach ($presets as $k => [$lbl, $s, $e]) { if ($s === $f['start'] && $e === $f['end']) { $active = $k; break; } }
-    $cats  = $conn->query("SELECT id, name, type FROM categories ORDER BY type DESC, name")->fetchAll(PDO::FETCH_ASSOC);
-    $users = $conn->query("SELECT id, username FROM users ORDER BY username")->fetchAll(PDO::FETCH_ASSOC);
+    $cats  = categories_for_branch((int)$f['branch']);
+    $ucond = $f['branch'] ? "WHERE branch_id = " . (int)$f['branch'] . " OR role = 'admin'" : (is_admin() ? "" : "WHERE branch_id = " . (int)scope_branch());
+    $users = $conn->query("SELECT id, username FROM users $ucond ORDER BY username")->fetchAll(PDO::FETCH_ASSOC);
     $adv = $f['method'] !== '' || $f['cat'] || $f['user'] || ($withSearch && $f['q'] !== '');
     $advCount = (int)($f['method'] !== '') + (int)(bool)$f['cat'] + (int)(bool)$f['user'] + (int)($withSearch && $f['q'] !== '');
     ?>
@@ -126,13 +137,21 @@ function rl_render_filters(PDO $conn, array $f, string $action, array $hidden = 
   <form method="get" action="<?= e($action) ?>" data-range class="stack" style="margin-top:14px">
     <?php foreach ($hidden as $hk => $hv): ?><input type="hidden" name="<?= e($hk) ?>" value="<?= e($hv) ?>"><?php endforeach; ?>
     <div class="row row-wrap" style="align-items:flex-end;gap:12px">
+      <?php if (is_admin() && $withBranch): ?>
+      <div class="field" style="flex:1 1 180px;max-width:260px"><label class="label" for="fBranch">Filial</label>
+        <select class="select input-sm" id="fBranch" name="branch">
+          <option value="0" <?= !$f['branch'] ? 'selected' : '' ?>>Barcha filiallar</option>
+          <?php foreach (branches_all() as $bb): ?><option value="<?= (int)$bb['id'] ?>" <?= (int)$f['branch'] === (int)$bb['id'] ? 'selected' : '' ?>><?= e($bb['name']) ?></option><?php endforeach; ?>
+        </select></div>
+      <?php endif; ?>
       <div class="row-dates grid" style="grid-template-columns:1fr 1fr;flex:1 1 280px;max-width:440px">
         <div class="field"><label class="label" for="fStart">Boshlanish</label><input class="input input-sm" id="fStart" type="date" name="start" value="<?= e($f['start']) ?>"></div>
         <div class="field"><label class="label" for="fEnd">Tugash</label><input class="input input-sm" id="fEnd" type="date" name="end" value="<?= e($f['end']) ?>"></div>
       </div>
       <button class="btn btn-primary" type="submit"><?= icon('filter', 'i-sm') ?> Qo'llash</button>
-      <?php if ($adv): ?><a class="btn btn-ghost" href="<?= e($action . '?' . http_build_query(['start' => $f['start'], 'end' => $f['end']] + array_filter($hidden))) ?>">Tozalash</a><?php endif; ?>
+      <?php if ($adv): ?><a class="btn btn-ghost" href="<?= e($action . '?' . http_build_query(['start' => $f['start'], 'end' => $f['end']] + (is_admin() ? ['branch' => (int)$f['branch']] : []) + array_filter($hidden))) ?>">Tozalash</a><?php endif; ?>
     </div>
+    <?php if ($withAdv): ?>
     <details <?= $adv ? 'open' : '' ?>>
       <summary><?= icon('sliders-horizontal', 'i-sm') ?> Qo'shimcha filtrlar <?php if ($advCount): ?><span class="badge badge-primary"><?= $advCount ?></span><?php endif; ?> <?= icon('chevron-down', 'i-sm i-chev') ?></summary>
       <div class="adv-grid">
@@ -157,7 +176,90 @@ function rl_render_filters(PDO $conn, array $f, string $action, array $hidden = 
         <?php endif; ?>
       </div>
     </details>
+    <?php endif; ?>
   </form>
 </section>
 <?php
+}
+
+
+/* ---------------------------------------------------------------------------
+   Branch-aware aggregates
+   --------------------------------------------------------------------------- */
+
+/** Income/expense/count per branch for the filter's range (method/cat/user/q filters respected). */
+function rl_by_branch(PDO $conn, array $f, ?string $start = null, ?string $end = null): array {
+    $f2 = $f; $f2['branch'] = 0;                      // all branches the user may see
+    [$w, $p] = rl_where($f2, $start, $end);
+    $st = $conn->prepare("SELECT t.branch_id, SUM(CASE WHEN t.cash_in=1 THEN t.payment ELSE 0 END) AS inc, SUM(CASE WHEN t.cash_in<>1 THEN t.payment ELSE 0 END) AS exp,
+                                 SUM(CASE WHEN t.cash_in=1 THEN 1 ELSE 0 END) AS n_in, SUM(CASE WHEN t.cash_in<>1 THEN 1 ELSE 0 END) AS n_out, MAX(t.date) AS last_date
+                          FROM transactions t WHERE $w GROUP BY t.branch_id");
+    $st->execute($p);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['branch_id']] = $r;
+    return $out;
+}
+
+/** Month-by-month income/expense (last $months months ending in $f['end']'s month), ignoring the start date. */
+function rl_monthly(PDO $conn, array $f, int $months = 12): array {
+    $endM = date('Y-m-01', strtotime($f['end']));
+    $startM = date('Y-m-01', strtotime("$endM -" . ($months - 1) . " months"));
+    $f2 = $f; $f2['start'] = $startM; $f2['end'] = date('Y-m-t', strtotime($endM));
+    [$w, $p] = rl_where($f2);
+    $st = $conn->prepare("SELECT substr(t.date,1,7) AS ym, SUM(CASE WHEN t.cash_in=1 THEN t.payment ELSE 0 END) AS inc, SUM(CASE WHEN t.cash_in<>1 THEN t.payment ELSE 0 END) AS exp, COUNT(*) AS n
+                          FROM transactions t WHERE $w GROUP BY ym ORDER BY ym");
+    $st->execute($p);
+    $have = []; foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $have[$r['ym']] = $r;
+    $out = [];
+    for ($i = 0; $i < $months; $i++) {
+        $ym = date('Y-m', strtotime("$startM +$i months"));
+        $out[] = ['ym' => $ym, 'inc' => (float)($have[$ym]['inc'] ?? 0), 'exp' => (float)($have[$ym]['exp'] ?? 0), 'n' => (int)($have[$ym]['n'] ?? 0)];
+    }
+    return $out;
+}
+
+/** Tiny inline-SVG sparkline from a list of numbers. */
+function sparkline(array $vals, string $color = '#4f46e5', int $w = 160, int $h = 44): string {
+    $n = count($vals); if ($n < 2) return '<svg class="spark" viewBox="0 0 ' . $w . ' ' . $h . '" aria-hidden="true"></svg>';
+    $min = min($vals); $max = max($vals); $rng = ($max - $min) ?: 1; $pad = 4;
+    $pts = [];
+    foreach (array_values($vals) as $i => $v) $pts[] = [round($pad + $i * (($w - 2 * $pad) / ($n - 1)), 1), round($h - $pad - (($v - $min) / $rng) * ($h - 2 * $pad), 1)];
+    $d = 'M' . implode(' L', array_map(function ($p) { return $p[0] . ' ' . $p[1]; }, $pts));
+    $area = $d . ' L' . $pts[$n - 1][0] . ' ' . ($h - 1) . ' L' . $pts[0][0] . ' ' . ($h - 1) . ' Z';
+    $id = 'g' . substr(md5($color . implode(',', $vals)), 0, 6);
+    return '<svg class="spark" viewBox="0 0 ' . $w . ' ' . $h . '" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="' . $id . '" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="' . $color . '" stop-opacity=".22"/><stop offset="1" stop-color="' . $color . '" stop-opacity="0"/></linearGradient></defs>'
+         . '<path d="' . $area . '" fill="url(#' . $id . ')"/><path class="line" d="' . $d . '" stroke="' . $color . '"/>'
+         . '<circle cx="' . $pts[$n - 1][0] . '" cy="' . $pts[$n - 1][1] . '" r="3" fill="' . $color . '" stroke="#fff" stroke-width="1.5"/></svg>';
+}
+
+/**
+ * Live per-branch snapshot for the admin: today, this month, money on hand, activity sparkline, headcount.
+ * @return array<int,array>  keyed by branch id (only branches visible to the user)
+ */
+function network_overview(?string $today = null, int $sparkDays = 14): array {
+    $today = $today ?: date('Y-m-d');
+    $ms = date('Y-m-01', strtotime($today)); $me = date('Y-m-t', strtotime($today));
+    $from = date('Y-m-d', strtotime("$today -" . ($sparkDays - 1) . " days"));
+    $ids = visible_branch_ids(); if (!$ids) return [];
+    $in = implode(',', array_map('intval', $ids));
+    $out = [];
+    foreach ($ids as $id) $out[$id] = ['b' => branch_get($id), 'd_in' => 0.0, 'd_out' => 0.0, 'd_n' => 0, 'm_in' => 0.0, 'm_out' => 0.0, 'm_n' => 0,
+                                       'tracked' => branch_tracked($id), 'tx' => 0, 'last' => null, 'cashiers' => 0, 'managers' => 0, 'emps' => 0, 'spark' => [], 'bal' => ['cash' => 0, 'click' => 0, 'bank' => 0, 'total' => 0]];
+    $q = function ($sql, $p = []) { $st = db()->prepare($sql); $st->execute($p); return $st->fetchAll(PDO::FETCH_ASSOC); };
+    foreach ($q("SELECT branch_id, SUM(CASE WHEN cash_in=1 THEN payment ELSE 0 END) i, SUM(CASE WHEN cash_in<>1 THEN payment ELSE 0 END) o, COUNT(*) n FROM transactions WHERE date = ? AND branch_id IN ($in) GROUP BY branch_id", [$today]) as $r)
+        { $x =& $out[(int)$r['branch_id']]; $x['d_in'] = (float)$r['i']; $x['d_out'] = (float)$r['o']; $x['d_n'] = (int)$r['n']; unset($x); }
+    foreach ($q("SELECT branch_id, SUM(CASE WHEN cash_in=1 THEN payment ELSE 0 END) i, SUM(CASE WHEN cash_in<>1 THEN payment ELSE 0 END) o, COUNT(*) n FROM transactions WHERE date BETWEEN ? AND ? AND branch_id IN ($in) GROUP BY branch_id", [$ms, $me]) as $r)
+        { $x =& $out[(int)$r['branch_id']]; $x['m_in'] = (float)$r['i']; $x['m_out'] = (float)$r['o']; $x['m_n'] = (int)$r['n']; unset($x); }
+    foreach ($q("SELECT branch_id, COUNT(*) n, MAX(date) d FROM transactions WHERE branch_id IN ($in) GROUP BY branch_id") as $r)
+        { $out[(int)$r['branch_id']]['tx'] = (int)$r['n']; $out[(int)$r['branch_id']]['last'] = $r['d']; }
+    foreach ($q("SELECT branch_id, role, COUNT(*) n FROM users WHERE is_active=1 AND role<>'admin' AND branch_id IN ($in) GROUP BY branch_id, role") as $r)
+        { if ($r['role'] === 'manager') $out[(int)$r['branch_id']]['managers'] = (int)$r['n']; else $out[(int)$r['branch_id']]['cashiers'] = (int)$r['n']; }
+    foreach ($q("SELECT branch_id, COUNT(*) n FROM employees WHERE branch_id IN ($in) GROUP BY branch_id") as $r) $out[(int)$r['branch_id']]['emps'] = (int)$r['n'];
+    $daily = [];
+    foreach ($q("SELECT branch_id, date, SUM(CASE WHEN cash_in=1 THEN payment ELSE 0 END) i FROM transactions WHERE date BETWEEN ? AND ? AND branch_id IN ($in) GROUP BY branch_id, date", [$from, $today]) as $r) $daily[(int)$r['branch_id']][$r['date']] = (float)$r['i'];
+    foreach ($ids as $id) {
+        for ($i = $sparkDays - 1; $i >= 0; $i--) { $d = date('Y-m-d', strtotime("$today -$i days")); $out[$id]['spark'][] = $daily[$id][$d] ?? 0; }
+        $out[$id]['bal'] = branch_balances($id);
+    }
+    return $out;
 }

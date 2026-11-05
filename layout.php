@@ -1,14 +1,13 @@
 <?php
 /**
- * Shared layout + helpers (design system shell).
- * Usage in a page:
- *   require 'layout.php';  ui_head('Sarlavha');  ui_start('daily'); ... ui_end();
+ * Shared layout + formatting helpers.
+ *   require 'layout.php'; ui_head('Title'); ui_start('daily'); ... ui_end(['active'=>'daily']);
+ * (layout.php loads db.php + auth.php, so pages only need to require this file.)
  */
-date_default_timezone_set('Asia/Tashkent');
-if (session_status() === PHP_SESSION_NONE) session_start();
+require_once __DIR__ . '/auth.php';
 
 const APP_NAME = 'OXFORD';
-const APP_SUB  = "Bo'zqal'a";
+const APP_TAGLINE = 'Filiallar moliyasi';
 
 /* ---------- Escaping & formatting ---------- */
 function e($s): string { return htmlspecialchars((string)($s ?? ''), ENT_QUOTES, 'UTF-8'); }
@@ -44,6 +43,11 @@ function local_time(?string $utc): string {
     $t = strtotime($utc . ' UTC');
     return $t ? date('H:i', $t) : '';
 }
+function local_datetime(?string $utc): string {
+    if (!$utc) return '';
+    $t = strtotime($utc . ' UTC');
+    return $t ? date('d.m.Y H:i', $t) : '';
+}
 function valid_date(?string $d): bool {
     return is_string($d) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) && strtotime($d) !== false;
 }
@@ -75,14 +79,12 @@ function asset(string $path): string {
 function icon(string $name, string $cls = ''): string {
     return '<svg class="i ' . e($cls) . '" aria-hidden="true"><use href="assets/icons.svg#' . e($name) . '"/></svg>';
 }
-
-/* ---------- Flash messages ---------- */
-function flash_set(string $type, string $msg): void { $_SESSION['flash'] = ['type' => $type, 'msg' => $msg]; }
-function flash_get(): ?array { $f = $_SESSION['flash'] ?? null; unset($_SESSION['flash']); return $f; }
-
-/* ---------- Auth guards ---------- */
-function require_login(): void { if (!isset($_SESSION['user_id'])) { header('Location: index.php'); exit; } }
-function require_admin(): void { if (($_SESSION['role'] ?? '') !== 'admin') { header('Location: index.php'); exit; } }
+/** Coloured rounded-square avatar with the branch initials. $b = null -> "all branches". */
+function branch_avatar(?array $b, string $size = ''): string {
+    if (!$b) return '<span class="avatar-branch all ' . e($size) . '">' . icon('layers', $size === 'xs' ? 'i-xs' : 'i-sm') . '</span>';
+    return '<span class="avatar-branch ' . e($size) . '" style="--bc:' . e(branch_color($b)) . '">' . e(branch_initials($b['name'])) . '</span>';
+}
+function branch_label(?array $b): string { return $b ? $b['name'] : 'Barcha filiallar'; }
 
 /* ---------- Page chrome ---------- */
 function ui_head(string $title, array $o = []): void {
@@ -93,16 +95,15 @@ function ui_head(string $title, array $o = []): void {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title><?= e($full) ?></title>
-<meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#171a23" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#ffffff">
+<meta name="csrf-token" content="<?= e(csrf_token()) ?>">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="<?= e(APP_NAME) ?>">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" type="image/png" href="logo.png">
-<link rel="apple-touch-icon" href="logo.png">
-<script>try{var t=localStorage.getItem('theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
+<link rel="icon" type="image/png" href="assets/logo-64.png">
+<link rel="apple-touch-icon" href="assets/logo-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -112,31 +113,67 @@ function ui_head(string $title, array $o = []): void {
 <?php
 }
 
-function ui_nav_items(string $role): array {
-    $items = [['daily', 'index.php', 'Kunlik', 'calendar-days', 'Kunlik hisob']];
-    if ($role === 'admin') {
-        $items[] = ['reports',   'hisobot.php',   'Hisobot',   'file-text',  'Hisobotlar'];
-        $items[] = ['analytics', 'analitika.php', 'Analitika', 'chart-line', 'Analitika'];
-        $items[] = ['admin',     'admin.php',     'Admin',     'settings',   'Admin panel'];
-    }
-    return $items;
+/** [key, href, short label, icon, long label, in bottom bar?, also-active keys] */
+function ui_nav_items(): array {
+    $u = auth_user(); $role = $u['role'] ?? 'staff';
+    if ($role === 'admin') return [
+        ['daily', 'index.php', 'Kunlik', 'calendar-days', 'Kunlik hisob', true, []],
+        ['branches', 'filiallar.php', 'Filiallar', 'store', 'Filiallar', true, []],
+        ['reports', 'hisobot.php', 'Hisobot', 'file-text', 'Hisobotlar', true, ['analytics', 'cashbook']],
+        ['analytics', 'analitika.php', 'Analitika', 'chart-line', 'Analitika', false, []],
+        ['cashbook', 'kassa.php', 'Kassa', 'wallet', 'Kassa kitobi', false, []],
+        ['admin', 'admin.php', 'Admin', 'settings', 'Admin panel', true, []],
+    ];
+    if ($role === 'manager') return [
+        ['daily', 'index.php', 'Kunlik', 'calendar-days', 'Kunlik hisob', true, []],
+        ['reports', 'hisobot.php', 'Hisobot', 'file-text', 'Hisobotlar', true, ['analytics']],
+        ['analytics', 'analitika.php', 'Analitika', 'chart-line', 'Analitika', false, []],
+        ['cashbook', 'kassa.php', 'Kassa', 'wallet', 'Kassa kitobi', true, []],
+        ['profile', 'profile.php', 'Profil', 'user-round', 'Profil', true, []],
+    ];
+    return [
+        ['daily', 'index.php', 'Kunlik', 'calendar-days', 'Kunlik hisob', true, []],
+        ['cashbook', 'kassa.php', 'Kassa', 'wallet', 'Kassa kitobi', true, []],
+        ['profile', 'profile.php', 'Profil', 'user-round', 'Profil', true, []],
+    ];
 }
 
 function ui_brand(): string {
-    return '<a class="brand" href="index.php" aria-label="' . e(APP_NAME) . '"><span class="brand-mark"><img src="logo.png" alt="" width="30" height="30"></span>'
-        . '<span><span class="brand-name">' . e(APP_NAME) . ' <span>' . e(APP_SUB) . '</span></span></span></a>';
+    return '<a class="brand" href="index.php" aria-label="' . e(APP_NAME) . '"><span class="brand-mark"><img src="assets/logo-64.png" alt="" width="30" height="30"></span>'
+        . '<span><span class="brand-name">' . e(APP_NAME) . '</span><span class="brand-sub">' . e(APP_TAGLINE) . '</span></span></a>';
+}
+
+function ui_back_param(): string {
+    $uri = $_SERVER['REQUEST_URI'] ?? 'index.php';
+    $file = basename(parse_url($uri, PHP_URL_PATH) ?: 'index.php');
+    $qs = parse_url($uri, PHP_URL_QUERY);
+    return rawurlencode($file . ($qs ? '?' . $qs : ''));
+}
+
+/** Branch badge. Admin: opens the switch dialog. Others: static label. */
+function ui_scope_switcher(string $variant): string {
+    $b = scope_branch_row(); $admin = is_admin();
+    $name = branch_label($b);
+    if ($variant === 'pill') {
+        $inner = branch_avatar($b, 'sm') . '<span class="nm">' . e($name) . '</span>' . ($admin ? icon('chevrons-up-down', 'i-sm') : '');
+        return $admin ? '<button type="button" class="pill-switch" data-open="#branchDialog" aria-label="Filialni almashtirish">' . $inner . '</button>'
+                      : '<span class="pill-switch">' . $inner . '</span>';
+    }
+    $inner = branch_avatar($b) . '<span class="sw-txt"><span class="sw-label">' . ($admin ? 'Joriy filial' : 'Filial') . '</span><span class="sw-name d-block" style="display:block">' . e($name) . '</span></span>'
+           . ($admin ? icon('chevrons-up-down', 'i-sm text-3') : '');
+    return $admin ? '<button type="button" class="switcher" data-open="#branchDialog">' . $inner . '</button>' : '<div class="switcher">' . $inner . '</div>';
 }
 
 /** Opens <body>, sidebar (desktop), topbar (mobile) and <main>. */
 function ui_start(string $active, array $o = []): void {
-    $role = $_SESSION['role'] ?? 'staff';
-    $user = $_SESSION['username'] ?? '';
-    $items = ui_nav_items($role);
-    $bnav = count($items) > 1;
-    ?><body class="<?= $bnav ? 'has-bnav' : '' ?>">
+    $u = auth_user();
+    $user = $u['username'] ?? ''; $role = $u['role'] ?? 'staff';
+    $items = ui_nav_items();
+    ?><body class="has-bnav">
 <div class="app">
   <aside class="sidebar no-print" aria-label="Asosiy navigatsiya">
     <?= ui_brand() ?>
+    <?= ui_scope_switcher('card') ?>
     <nav class="nav" aria-label="Bo'limlar">
       <div class="eyebrow nav-label">Bo'limlar</div>
       <?php foreach ($items as [$key, $href, $short, $ic, $long]): ?>
@@ -144,53 +181,63 @@ function ui_start(string $active, array $o = []): void {
       <?php endforeach; ?>
     </nav>
     <div class="side-foot">
-      <div class="user-chip">
+      <a class="user-chip" href="profile.php" aria-label="Profil" style="text-decoration:none">
         <span class="avatar avatar-sm"><?= e(mb_substr($user, 0, 1)) ?></span>
-        <span class="grow"><span class="fw-7 fs-md truncate d-block" style="display:block"><?= e($user) ?></span><span class="badge <?= $role === 'admin' ? 'badge-primary' : 'badge-in' ?>"><?= e($role) ?></span></span>
-      </div>
-      <div class="row gap-2">
-        <button class="btn btn-sm grow" type="button" data-theme-toggle aria-label="Mavzuni almashtirish"><?= icon('moon', 'i-sm') ?> Mavzu</button>
-        <a class="btn btn-sm btn-danger-soft" href="index.php?logout=true" aria-label="Chiqish"><?= icon('log-out', 'i-sm') ?> Chiqish</a>
-      </div>
+        <span class="grow"><span class="fw-7 fs-md truncate" style="display:block"><?= e($u['full_name'] ?: $user) ?></span><span class="badge <?= $role === 'admin' ? 'badge-primary' : ($role === 'manager' ? 'badge-warn' : 'badge-in') ?>"><?= e(role_label($role)) ?></span></span>
+        <?= icon('chevron-right', 'i-sm text-3') ?>
+      </a>
+      <a class="btn btn-sm btn-danger-soft" href="process.php?action=logout" data-post aria-label="Chiqish"><?= icon('log-out', 'i-sm') ?> Chiqish</a>
     </div>
   </aside>
 
   <div class="grow" style="min-width:0">
     <header class="topbar no-print">
-      <?= ui_brand() ?>
-      <div class="row gap-1">
-        <button class="btn btn-ghost btn-icon" type="button" data-theme-toggle aria-label="Mavzuni almashtirish"><?= icon('moon') ?></button>
-        <a class="btn btn-ghost btn-icon" href="index.php?logout=true" aria-label="Chiqish"><?= icon('log-out') ?></a>
-      </div>
+      <a class="brand-mark" href="index.php" aria-label="Bosh sahifa"><img src="assets/logo-64.png" alt="" width="30" height="30"></a>
+      <?= ui_scope_switcher('pill') ?>
+      <a class="btn btn-ghost btn-icon" href="process.php?action=logout" data-post aria-label="Chiqish"><?= icon('log-out') ?></a>
     </header>
-    <main class="main <?= $bnav ? '' : 'no-bnav' ?>" id="main">
+    <main class="main" id="main">
 <?php
 }
 
 function ui_end(array $o = []): void {
-    $role = $_SESSION['role'] ?? 'staff';
     $active = $o['active'] ?? '';
-    $items = ui_nav_items($role);
+    $items = array_values(array_filter(ui_nav_items(), function ($i) { return $i[5]; }));
     ?>
     </main>
   </div>
 </div>
-<?php if (count($items) > 1): ?>
 <nav class="bnav no-print" aria-label="Pastki navigatsiya">
-  <?php foreach ($items as [$key, $href, $short, $ic]): ?>
-    <a href="<?= e($href) ?>" <?= $key === $active ? 'aria-current="page"' : '' ?>><?= icon($ic) ?><span><?= e($short) ?></span></a>
+  <?php foreach ($items as [$key, $href, $short, $ic, $long, $b, $also]): ?>
+    <a href="<?= e($href) ?>" <?= ($key === $active || in_array($active, $also, true)) ? 'aria-current="page"' : '' ?>><?= icon($ic) ?><span><?= e($short) ?></span></a>
   <?php endforeach; ?>
 </nav>
-<?php endif; ?>
 <?= $o['after'] ?? '' ?>
 <?php ui_footer($o); ?>
 <?php
 }
 
-/** Confirm dialog, toasts, scripts. Also used by pages without the shell (login). */
+/** Branch dialog (admin), confirm dialog, toasts, scripts. Also used by pages without the shell (login). */
 function ui_footer(array $o = []): void {
     $flash = flash_get();
     ?>
+<?php if (is_admin()): $cur = scope_branch(); $back = ui_back_param(); ?>
+<dialog class="modal" id="branchDialog" aria-labelledby="branchDlgTitle">
+  <div class="modal-box">
+    <div class="modal-head"><h2 class="modal-title" id="branchDlgTitle">Filialni tanlang</h2><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Yopish"><?= icon('x') ?></button></div>
+    <div class="branch-list">
+      <a class="branch-opt" href="process.php?action=switch_branch&id=0&back=<?= $back ?>" <?= $cur === 0 ? 'aria-current="true"' : '' ?>>
+        <?= branch_avatar(null) ?><span><span class="nm d-block" style="display:block">Barcha filiallar</span><span class="sub"><?= count(branches_active()) ?> ta faol filial · umumiy ko'rinish</span></span><?= $cur === 0 ? icon('circle-check', 'i-check') : '' ?>
+      </a>
+      <?php foreach (branches_all() as $b): ?>
+      <a class="branch-opt" href="process.php?action=switch_branch&id=<?= (int)$b['id'] ?>&back=<?= $back ?>" <?= $cur === (int)$b['id'] ? 'aria-current="true"' : '' ?>>
+        <?= branch_avatar($b) ?><span class="grow"><span class="nm d-block" style="display:block"><?= e($b['name']) ?></span><span class="sub"><?= $b['is_active'] ? e($b['address'] ?: 'Faol filial') : 'Arxivlangan' ?></span></span><?= $cur === (int)$b['id'] ? icon('circle-check', 'i-check') : '' ?>
+      </a>
+      <?php endforeach; ?>
+    </div>
+  </div>
+</dialog>
+<?php endif; ?>
 <dialog class="modal modal-sm" id="confirmDialog" aria-labelledby="confirmTitle">
   <div class="modal-box">
     <div class="row" style="align-items:flex-start;gap:14px">
@@ -215,13 +262,42 @@ function ui_footer(array $o = []): void {
 <?php
 }
 
-/** Sub navigation between Hisobot and Analitika, keeping the active filter query string. */
+/** Reports sub navigation (Hisobot / Analitika / Kassa kitobi), keeping the active filter query string. */
 function ui_report_subnav(string $active, string $qs = ''): void {
     $q = $qs !== '' ? '?' . $qs : '';
     ?>
 <div class="subnav no-print" role="navigation" aria-label="Hisobot turlari">
   <a href="hisobot.php<?= e($q) ?>" <?= $active === 'reports' ? 'aria-current="page"' : '' ?>><?= icon('file-text', 'i-sm') ?> Hisobot</a>
-  <a href="analitika.php<?= e($q) ?>" <?= $active === 'analytics' ? 'aria-current="page"' : '' ?>><?= icon('chart-line', 'i-sm') ?> Grafik analitika</a>
+  <a href="analitika.php<?= e($q) ?>" <?= $active === 'analytics' ? 'aria-current="page"' : '' ?>><?= icon('chart-line', 'i-sm') ?> Analitika</a>
+  <a href="kassa.php<?= e($q) ?>" <?= $active === 'cashbook' ? 'aria-current="page"' : '' ?>><?= icon('wallet', 'i-sm') ?> Kassa kitobi</a>
 </div>
 <?php
+}
+
+/** "Branch · period" chip used under page titles. */
+function ui_scope_chip(?int $branchId = null): string {
+    $b = $branchId === null ? scope_branch_row() : ($branchId ? branch_get($branchId) : null);
+    return '<span class="scope-chip">' . branch_avatar($b, 'xs') . e(branch_label($b)) . '</span>';
+}
+
+/** [label, icon, tone] for an audit-log action. */
+function journal_meta(string $a): array {
+    $m = [
+        'login' => ['Tizimga kirdi', 'log-in', 'primary'], 'logout' => ['Tizimdan chiqdi', 'log-out', ''],
+        'tx.create' => ["Tranzaksiya qo'shildi", 'plus', 'in'], 'tx.update' => ['Tranzaksiya tahrirlandi', 'pencil', 'warn'],
+        'tx.delete' => ["Tranzaksiya o'chirildi", 'trash-2', 'danger'], 'tx.delete_restored' => ["Tranzaksiya o'chirilgan (qaytarilgan)", 'undo-2', ''],
+        'tx.restore' => ['Tranzaksiya qaytarildi', 'undo-2', 'in'],
+        'branch.create' => ['Filial yaratildi', 'store', 'in'], 'branch.update' => ['Filial tahrirlandi', 'store', 'warn'],
+        'branch.archive' => ['Filial arxivlandi', 'archive', 'warn'], 'branch.activate' => ['Filial faollashtirildi', 'store', 'in'],
+        'branch.delete' => ["Filial o'chirildi", 'trash-2', 'danger'], 'branch.setting' => ['Filial ruxsati o\'zgardi', 'shield-check', 'primary'],
+        'user.create' => ["Foydalanuvchi qo'shildi", 'user-plus', 'in'], 'user.update' => ['Foydalanuvchi tahrirlandi', 'user-cog', 'warn'],
+        'user.block' => ['Foydalanuvchi bloklandi', 'ban', 'danger'], 'user.activate' => ['Foydalanuvchi faollashtirildi', 'circle-check', 'in'],
+        'user.delete' => ["Foydalanuvchi o'chirildi", 'trash-2', 'danger'], 'user.password' => ["Parol o'zgartirildi", 'key-round', 'primary'],
+        'employee.create' => ["Xodim qo'shildi", 'briefcase', 'in'], 'employee.update' => ['Xodim tahrirlandi', 'briefcase', 'warn'], 'employee.delete' => ["Xodim o'chirildi", 'trash-2', 'danger'],
+        'category.create' => ["Kategoriya qo'shildi", 'tag', 'in'], 'category.update' => ['Kategoriya tahrirlandi', 'tag', 'warn'], 'category.delete' => ["Kategoriya o'chirildi", 'trash-2', 'danger'],
+        'setting.update' => ['Sozlama o\'zgardi', 'settings', 'primary'], 'backup.create' => ['Zaxira nusxa olindi', 'database-backup', 'primary'], 'backup.download' => ['Zaxira yuklab olindi', 'download', 'primary'],
+        'sample.load' => ["Namuna ma'lumot yuklandi", 'flask-conical', 'warn'], 'sample.delete' => ["Namuna ma'lumot o'chirildi", 'flask-conical', 'warn'],
+        'cash.count' => ['Kassa sanaldi', 'calculator', 'primary'], 'export.csv' => ['CSV yuklab olindi', 'download', 'primary'], 'import.commit' => ["Ma'lumot import qilindi", 'upload', 'in'], 'denied' => ['Ruxsat rad etildi', 'shield-alert', 'danger'],
+    ];
+    return $m[$a] ?? [$a, 'info', ''];
 }

@@ -1,7 +1,7 @@
 {
-  "name": "OXFORD Bo'zqal'a — Moliyaviy hisob",
+  "name": "OXFORD — Filiallar moliyasi",
   "short_name": "OXFORD",
-  "description": "Kunlik kirim-chiqim, hisobotlar va analitika",
+  "description": "Filiallar bo'yicha kunlik kirim-chiqim, kassa, hisobotlar va analitika",
   "start_url": "index.php",
   "scope": "./",
   "display": "standalone",
@@ -11,10 +11,16 @@
   "lang": "uz",
   "icons": [
     {
-      "src": "logo.png",
-      "sizes": "556x496",
+      "src": "assets/logo-192.png",
+      "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "assets/logo-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

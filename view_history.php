@@ -1,16 +1,13 @@
 <?php
-require_once 'db.php';
-require_once 'layout.php';
+require_once __DIR__ . '/layout.php';
 require_login();
 
 $id = (int)($_GET['id'] ?? 0);
-$tx = $conn->prepare("SELECT t.*, c.name AS category_name, u.username AS author FROM transactions t LEFT JOIN categories c ON t.category_id=c.id LEFT JOIN users u ON t.user_id=u.id WHERE t.id=?");
-$tx->execute([$id]);
-$trans = $tx->fetch(PDO::FETCH_ASSOC);
+$trans = tx_authorized($id);
+if ($trans) { $au = db()->prepare("SELECT username FROM users WHERE id = ?"); $au->execute([$trans['user_id']]); $trans['author'] = $au->fetchColumn(); }
 
-$hist = $conn->prepare("SELECT h.*, u.username FROM transaction_history h LEFT JOIN users u ON h.user_id=u.id WHERE transaction_id=? ORDER BY changed_at DESC, h.id DESC");
-$hist->execute([$id]);
-$logs = $hist->fetchAll(PDO::FETCH_ASSOC);
+$hist = db()->prepare("SELECT h.*, u.username FROM transaction_history h LEFT JOIN users u ON h.user_id=u.id WHERE transaction_id=? ORDER BY changed_at DESC, h.id DESC");
+if ($trans) { $hist->execute([$id]); $logs = $hist->fetchAll(); } else { $logs = []; }
 $back = $trans ? 'index.php?date=' . urlencode($trans['date']) : 'index.php';
 
 ui_head("O'zgarishlar tarixi");
@@ -31,7 +28,9 @@ ui_start('daily');
   </div>
   <?php endif; ?>
 
-  <?php if (count($logs) > 0): ?>
+  <?php if (!$trans): ?>
+  <div class="card empty"><div class="icon-tile"><?= icon('shield-alert', 'i-lg') ?></div><b>Tranzaksiya topilmadi</b><span class="fs-sm">U mavjud emas yoki boshqa filialga tegishli.</span></div>
+  <?php elseif (count($logs) > 0): ?>
   <ol class="card clip list" style="list-style:none;margin:0;padding:0">
     <?php foreach ($logs as $l): ?>
     <li class="card-pad">
