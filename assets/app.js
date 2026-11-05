@@ -218,13 +218,20 @@
   function initProof(box) {
     if (box._ready) return; box._ready = true;
     var inp = $('input[type="file"]', box), empty = $('.pd-empty', box), prev = $('.pd-preview', box), img = $('img', prev), meta = $('.pd-meta', prev), clearBtn = $('[data-proof-clear]', box);
+    var tile = $('.pd-filetile', prev);
     function show(f) {
-      if (!f) { prev.hidden = true; empty.hidden = false; if (img.src) URL.revokeObjectURL(img.src); img.removeAttribute('src'); box.classList.remove('need'); return; }
-      img.src = URL.createObjectURL(f); meta.innerHTML = '<b></b><span></span>'; meta.firstChild.textContent = f.name || 'skrinshot'; meta.lastChild.textContent = fmtSize(f.size) + ' · tayyor';
+      if (!f) { prev.hidden = true; empty.hidden = false; if (img.src) URL.revokeObjectURL(img.src); img.removeAttribute('src'); img.hidden = false; if (tile) tile.hidden = true; box.classList.remove('need'); return; }
+      var isImg = /^image\//.test(f.type);
+      if (isImg) { img.src = URL.createObjectURL(f); } else { img.removeAttribute('src'); }
+      img.hidden = !isImg; if (tile) tile.hidden = isImg;
+      meta.innerHTML = '<b></b><span></span>'; meta.firstChild.textContent = f.name || 'fayl'; meta.lastChild.textContent = fmtSize(f.size) + (isImg ? ' · tayyor' : ' · ' + (f.name || '').split('.').pop().toUpperCase());
       empty.hidden = true; prev.hidden = false; box.classList.remove('need');
     }
+    var OK_EXT = /\.(pdf|docx?|xlsx?|odt|rtf|txt|csv)$/i;
     function setFile(f) {
-      if (!f || !/^image\//.test(f.type)) { toast('Faqat rasm tanlang (JPG, PNG, WEBP)', 'error'); return; }
+      var okType = f && (/^image\//.test(f.type) || f.type === 'application/pdf' || OK_EXT.test(f.name || ''));
+      if (!okType) { toast('Ruxsat etilgan: rasm, PDF, Word, Excel, TXT/CSV', 'error'); return; }
+      if (f.size > 15 * 1024 * 1024) { toast('Fayl juda katta (maks. 15 MB)', 'error'); return; }
       compressImage(f).then(function (g) {
         try { var dt = new DataTransfer(); dt.items.add(g); inp.files = dt.files; } catch (e) { /* old browser: original file stays in the input */ }
         show(g);
@@ -263,10 +270,14 @@
     var v = e.target.closest('[data-proof-view]'); if (!v) return;
     e.preventDefault(); closeMenu();
     var d = $('#proofDialog'); if (!d) return;
-    var src = 'proof.php?id=' + encodeURIComponent(v.getAttribute('data-proof-view'));
-    $('img', d).src = src; $('#proofOpen', d).href = src; openDialog(d);
+    var src = 'proof.php?id=' + encodeURIComponent(v.getAttribute('data-proof-view')), kind = v.getAttribute('data-proof-kind') || 'image', nm = v.getAttribute('data-proof-name') || '';
+    var im = $('#pvImg', d), fl = $('#pvFile', d);
+    if (kind === 'image') { im.hidden = false; fl.hidden = true; im.src = src; }
+    else { im.hidden = true; im.removeAttribute('src'); fl.hidden = false; $('#pvName', d).textContent = nm || 'fayl'; $('#pvKind', d).textContent = kind === 'pdf' ? 'PDF hujjat' : 'Hujjat (yuklab olinadi)'; }
+    $('#proofOpen', d).href = src; $('#proofOpen', d).hidden = (kind === 'file'); $('#proofDl', d).href = src + '&dl=1';
+    openDialog(d);
   });
-  var pdlg = $('#proofDialog'); if (pdlg) pdlg.addEventListener('close', function () { $('img', pdlg).removeAttribute('src'); });
+  var pdlg = $('#proofDialog'); if (pdlg) pdlg.addEventListener('close', function () { $('#pvImg', pdlg).removeAttribute('src'); });
 
   // Auto-grow textareas
   doc.addEventListener('input', function (e) {

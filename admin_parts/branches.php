@@ -37,7 +37,7 @@
       <label class="field"><span class="label">Kassir o'chirishi</span>
         <select class="select input-sm" data-bset="staff_can_delete">
           <option value="default" <?= $own2 === 'default' ? 'selected' : '' ?>>Standart (<?= $gd ? 'Ha' : "Yo'q" ?>)</option><option value="1" <?= $own2 === '1' ? 'selected' : '' ?>>Ha</option><option value="0" <?= $own2 === '0' ? 'selected' : '' ?>>Yo'q</option></select></label>
-      <label class="field" style="grid-column:1/-1"><span class="label">Click/Bank skrinshoti majburiy</span>
+      <label class="field" style="grid-column:1/-1"><span class="label">Click/Bank isboti (fayl) majburiy</span>
         <select class="select input-sm" data-bset="require_proof">
           <?php $own3 = array_key_exists("b$id.require_proof", settings_all()) ? setting('require_proof', '1', $id) : 'default'; $gp3 = setting('require_proof', '1') === '1'; ?>
           <option value="default" <?= $own3 === 'default' ? 'selected' : '' ?>>Standart (<?= $gp3 ? 'Ha' : "Yo'q" ?>)</option><option value="1" <?= $own3 === '1' ? 'selected' : '' ?>>Ha</option><option value="0" <?= $own3 === '0' ? 'selected' : '' ?>>Yo'q</option></select></label>

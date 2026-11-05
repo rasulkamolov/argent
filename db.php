@@ -11,7 +11,7 @@ if (!defined('DB_FILE')) {
     define('DB_FILE', getenv('ARGENT_DB') ?: (__DIR__ . '/harvards_finance.sqlite'));
 }
 if (!defined('DEFAULT_BRANCH_NAME')) define('DEFAULT_BRANCH_NAME', "OXFORD Bo'zqal'a");
-const DB_SCHEMA_VERSION = 4;   // v2: multi-branch, v3: branches.balance_ok, v4: transactions.proof (payment screenshots)
+const DB_SCHEMA_VERSION = 5;   // v2: multi-branch, v3: branches.balance_ok, v4: transactions.proof, v5: transactions.proof_name
 
 function db_has_column(PDO $c, string $table, string $col): bool {
     foreach ($c->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -91,7 +91,8 @@ function db_migrate(PDO $c): void {
         db_add_column($c, 'users', 'last_login_at', 'TEXT');
         db_add_column($c, 'transactions', 'branch_id', 'INTEGER');
         db_add_column($c, 'transactions', 'ext_ref', 'TEXT');
-        db_add_column($c, 'transactions', 'proof', 'TEXT');      // relative path of the payment screenshot (data/proofs/...)
+        db_add_column($c, 'transactions', 'proof', 'TEXT');
+        db_add_column($c, 'transactions', 'proof_name', 'TEXT');   // original file name (shown / used when downloading)      // relative path of the payment screenshot (data/proofs/...)
         db_add_column($c, 'employees', 'branch_id', 'INTEGER');
         db_add_column($c, 'employees', 'phone', "TEXT DEFAULT ''");
         db_add_column($c, 'categories', 'branch_id', 'INTEGER');   // NULL = shared by all branches

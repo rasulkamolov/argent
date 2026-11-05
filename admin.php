@@ -48,7 +48,7 @@ foreach ($B as $b) { if ($b['is_active'] && empty($ov[$b['id']]['tracked'])) { $
 $expo = web_exposure_check();
 if (!empty($expo)) $alerts[] = ['danger', "XAVFLI: internetdan ochiq yuklab olish mumkin: " . implode('; ', $expo) . ". Hostingda .htaccess fayli ishlayotganini tekshiring (yoki faylni public_html dan tashqariga ko'chiring).", 'admin.php#settings', "Batafsil"];
 $np30 = db()->prepare("SELECT COUNT(*) FROM transactions t WHERE t.cash_in = 1 AND " . proof_missing_sql('t') . " AND t.date >= ?"); $np30->execute([date('Y-m-d', strtotime('-30 days'))]); $np30 = (int)$np30->fetchColumn();
-if ($np30 > 0) $alerts[] = ['warn', "Oxirgi 30 kunda $np30 ta Click/Bank kirim uchun to'lov skrinshoti yo'q.", 'hisobot.php?proof=missing&branch=0&start=' . date('Y-m-d', strtotime('-30 days')) . '&end=' . date('Y-m-d'), "Ko'rish"];
+if ($np30 > 0) $alerts[] = ['warn', "Oxirgi 30 kunda $np30 ta Click/Bank kirim uchun to'lov isboti yo'q.", 'hisobot.php?proof=missing&branch=0&start=' . date('Y-m-d', strtotime('-30 days')) . '&end=' . date('Y-m-d'), "Ko'rish"];
 $bk = glob(__DIR__ . '/data/backups/backup_*.sqlite') ?: []; sort($bk);
 $lastBk = $bk ? filemtime(end($bk)) : 0;
 if (!$lastBk || $lastBk < strtotime('-7 days')) $alerts[] = ['warn', $lastBk ? "Oxirgi zaxira nusxa " . floor((time() - $lastBk) / 86400) . " kun oldin olingan." : "Hali zaxira nusxa olinmagan.", '#settings', "Zaxira olish"];

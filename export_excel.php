@@ -21,7 +21,7 @@ header("Content-Disposition: attachment; filename=\"$filename\"");
 header('Cache-Control: no-cache, no-store, must-revalidate');
 
 echo "\xEF\xBB\xBF"; // UTF-8 BOM for Excel
-echo implode(';', ['Sana', 'Filial', 'Kategoriya', 'Izoh', 'Summa', 'Tur', "To'lov usuli", 'Skrinshot', 'Kiritdi']) . "\r\n";
+echo implode(';', ['Sana', 'Filial', 'Kategoriya', 'Izoh', 'Summa', 'Tur', "To'lov usuli", 'Isbot', 'Kiritdi']) . "\r\n";
 
 // guard against CSV/Excel formula injection
 $safe = function ($v) { $v = (string)$v; return ($v !== '' && strpbrk($v[0], "=+-@\t\r") !== false) ? "'" . $v : $v; };

@@ -27,10 +27,12 @@ Agar hostingdagi bazani yangi fayl bilan almashtirib yuborgan bo'lsangiz:
 4. Kirish: `admin` / `admin0007` → **darhol parolni o'zgartiring** (Profil). Eski parollar birinchi kirishda avtomatik shifrlanadi.
 5. Admin → Filiallar → Tahrirlash: «Kassa qoldig'ini yuritish» ni yoqib, kassadagi haqiqiy pulni kiriting (shundan keyingina «Kassada» qoldig'i ko'rsatiladi).
 
-## To'lov skrinshotlari (Click / Bank)
-- Kassir «Click» yoki «Bank» tanlasa, skrinshot maydoni chiqadi: rasmni **tashlash**, **tanlash/kameradan olish** yoki **Ctrl+V** bilan qo'yish mumkin. Katta rasmlar avtomatik kichraytiriladi.
+## To'lov isboti (Click / Bank): skrinshot yoki istalgan hujjat
+- Kassir «Click» yoki «Bank» tanlasa, fayl maydoni chiqadi: **tashlash**, **tanlash/kameradan olish** yoki rasmni **Ctrl+V** bilan qo'yish mumkin. Katta rasmlar avtomatik kichraytiriladi.
+- Ruxsat etilgan fayllar (maks. 15 MB): rasm (JPG, PNG, WEBP, GIF), **PDF**, Word (doc/docx), Excel (xls/xlsx), ODT, RTF, TXT/CSV. Rasm va PDF brauzerda ochiladi, boshqa hujjatlar yuklab olinadi.
+- Xavfsizlik: fayl turi nomiga emas, **ichiga qarab** aniqlanadi; `.php`, `.exe`, `.html`, `.svg` va boshqa ijro etiladigan fayllar qabul qilinmaydi, fayl har doim betaraf kengaytma bilan saqlanadi.
 - Kassirlar uchun majburiy (Admin → Sozlamalar yoki har bir filial kartasida o'chirish mumkin). Admin/menejer uchun majburiy emas.
-- Rasmlar `data/proofs/` da saqlanadi va faqat tizimga kirgan, **o'sha filialga huquqi bor** foydalanuvchiga ko'rsatiladi. Ro'yxatda «Skrinshot» belgisi; yo'qlari «Skrinshotsiz» deb belgilanadi. Hisobotda «Skrinshotsiz» filtri va CSV da «Skrinshot» ustuni bor.
+- Fayllar `data/proofs/` da saqlanadi va faqat tizimga kirgan, **o'sha filialga huquqi bor** foydalanuvchiga ko'rsatiladi. Ro'yxatda «Skrinshot/PDF/Fayl» belgisi; yo'qlari «Isbotsiz» deb belgilanadi. Hisobotda «Isbotsiz» filtri va CSV da «Isbot» ustuni bor.
 - `data/` papkasini ham (FTP orqali) zaxiralab turing — `Yuklab olish (.sqlite)` faqat bazani oladi.
 
 ## Zaxira
@@ -40,5 +42,5 @@ Agar hostingdagi bazani yangi fayl bilan almashtirib yuborgan bo'lsangiz:
 ## Fayllar
 - `index.php` kunlik hisob · `filiallar.php` filiallar taqqoslash · `hisobot.php`, `analitika.php`, `kassa.php` hisobotlar
 - `admin.php` + `admin_parts/` boshqaruv · `import.php` + `import_lib.php` SQL import · `backup.php` zaxira
-- `proofs.php`, `proof.php` skrinshotlar · `db.php` (baza va migratsiya) · `auth.php` (rollar, filial doirasi, CSRF) · `process.php` (barcha amallar)
+- `proofs.php`, `proof.php` isbot fayllari · `db.php` (baza va migratsiya) · `auth.php` (rollar, filial doirasi, CSRF) · `process.php` (barcha amallar)
 - `tools/import_cli.php` — buyruq satridan import: `php tools/import_cli.php dump.sql "Filial" --create-branch`

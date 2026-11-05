@@ -106,7 +106,7 @@ ui_start('reports');
 
   <?php if ((int)$np['n'] > 0 && $f['proof'] !== 'missing'): ?>
   <div class="alert info" style="margin-top:16px;background:var(--warn-soft);color:var(--warn-text)"><?= icon('image-off') ?>
-    <div class="grow"><b><?= fmt($np['n']) ?> ta</b> Click/Bank kirim (<?= e(fmt_short($np['s'])) ?> so'm) uchun to'lov skrinshoti biriktirilmagan.</div>
+    <div class="grow"><b><?= fmt($np['n']) ?> ta</b> Click/Bank kirim (<?= e(fmt_short($np['s'])) ?> so'm) uchun to'lov isboti (skrinshot/PDF) biriktirilmagan.</div>
     <a class="btn btn-sm" href="hisobot.php?<?= e(rl_qs($f, ['proof' => 'missing'])) ?>#tx">Ko'rish</a></div>
   <?php endif; ?>
 
@@ -198,7 +198,7 @@ ui_start('reports');
             <td class="c-cat"><span class="cat-cell"><span class="icon-tile <?= $is_in ? 'in' : 'out' ?>"><?= icon($is_in ? 'arrow-down-left' : 'arrow-up-right') ?></span><span><?= e($r['cat'] ?: ($is_in ? 'Kirim' : 'Chiqim')) ?></span></span></td>
             <td class="c-break"></td>
             <td class="c-note"><?= linkify($r['comment']) ?></td>
-            <td class="c-method"><span class="badge badge-<?= $m ?>"><?= icon($mm['icon'], 'i-xs') ?><?= e($mm['label']) ?></span><?php if (!empty($r['proof'])): ?> <button type="button" class="badge badge-proof ok" data-proof-view="<?= (int)$r['id'] ?>" title="Skrinshotni ko'rish"><?= icon('image', 'i-xs') ?></button><?php elseif (proof_is_missing($r)): ?> <span class="badge badge-proof miss" title="Skrinshot yo'q"><?= icon('image-off', 'i-xs') ?></span><?php endif; ?></td>
+            <td class="c-method"><span class="badge badge-<?= $m ?>"><?= icon($mm['icon'], 'i-xs') ?><?= e($mm['label']) ?></span><?php if (!empty($r['proof'])): ?> <button type="button" class="badge badge-proof ok" <?= proof_attrs($r) ?> title="Isbotni ko'rish"><?= icon(proof_info($r['proof'])['kind'] === 'image' ? 'image' : 'file-text', 'i-xs') ?></button><?php elseif (proof_is_missing($r)): ?> <span class="badge badge-proof miss" title="Isbot yo'q"><?= icon('image-off', 'i-xs') ?></span><?php endif; ?></td>
             <td class="c-author text-2"><?= e($r['author']) ?></td>
             <td class="c-amt r num fw-8 nowrap <?= $is_in ? 'text-in' : 'text-out' ?>"><?= $is_in ? '+' : '−' ?><?= fmt($r['payment']) ?></td>
           </tr>

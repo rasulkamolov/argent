@@ -711,5 +711,17 @@ a.bcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border
 #proofDialog .modal-box { padding-top: 16px; }
 #proofDialog img { display: block; width: 100%; max-height: 70dvh; object-fit: contain; border-radius: 14px; background: var(--surface-3); }
 @media (min-width: 640px) { #proofDialog .modal-box { width: min(560px, calc(100% - 32px)); } }
+.pd-filetile { width: 76px; height: 76px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--primary-text); display: grid; place-items: center; flex: none; }
+.pd-filetile[hidden], .proof-drop .pd-preview img[hidden] { display: none; }
+.pv-file { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 28px 12px; text-align: center; border-radius: 14px; background: var(--surface-3); }
+.pv-file[hidden] { display: none; }
+.pv-file .pd-filetile { width: 72px; height: 72px; }
+.pv-file b { word-break: break-all; font-size: 15px; }
+.pv-file small { color: var(--text-3); }
+.proof-filecard { display: flex; align-items: center; gap: 12px; width: 100%; max-width: 420px; padding: 10px 12px; text-align: left; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); cursor: pointer; font: inherit; color: inherit; }
+.proof-filecard:hover { border-color: var(--primary); background: var(--primary-soft); }
+.proof-filecard .pd-filetile { width: 48px; height: 48px; }
+.proof-filecard b { display: block; word-break: break-all; }
+.proof-filecard small { color: var(--text-3); }
 .proof-thumb { display: inline-block; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #fff; max-width: 220px; }
 .proof-thumb img { display: block; width: 100%; }

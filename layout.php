@@ -163,9 +163,9 @@ function ui_back_param(): string {
 /** Drop / paste / pick zone for a payment screenshot. */
 function ui_proof_drop(bool $required = false, string $name = 'proof', string $id = ''): string {
     return '<div class="proof-drop" data-proof' . ($required ? ' data-required' : '') . ($id ? ' id="' . e($id) . '"' : '') . ' tabindex="0" role="button" aria-label="Skrinshot biriktirish">'
-        . '<input type="file" name="' . e($name) . '" accept="image/*" tabindex="-1">'
-        . '<div class="pd-empty"><span class="pd-ic">' . icon('image-plus') . '</span><b>Skrinshotni shu yerga tashlang</b><small>yoki bosib rasm tanlang · Ctrl+V bilan qo\'ying</small></div>'
-        . '<div class="pd-preview" hidden><img alt=""><div class="pd-meta"></div><button type="button" class="btn btn-ghost btn-icon btn-sm" data-proof-clear aria-label="Rasmni olib tashlash">' . icon('x', 'i-sm') . '</button></div>'
+        . '<input type="file" name="' . e($name) . '" accept="image/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx,.odt,.rtf,.txt,.csv" tabindex="-1">'
+        . '<div class="pd-empty"><span class="pd-ic">' . icon('image-plus') . '</span><b>Skrinshot yoki PDF ni shu yerga tashlang</b><small>yoki bosib fayl tanlang · rasmni Ctrl+V bilan qo\'ying</small></div>'
+        . '<div class="pd-preview" hidden><img alt=""><span class="pd-filetile" hidden>' . icon('file-text', 'i-lg') . '</span><div class="pd-meta"></div><button type="button" class="btn btn-ghost btn-icon btn-sm" data-proof-clear aria-label="Faylni olib tashlash">' . icon('x', 'i-sm') . '</button></div>'
         . '</div>';
 }
 
@@ -275,9 +275,13 @@ function ui_footer(array $o = []): void {
 <?php if (auth_user()): ?>
 <dialog class="modal" id="proofDialog" aria-labelledby="pvTitle">
   <div class="modal-box">
-    <div class="modal-head"><h2 class="modal-title" id="pvTitle">To'lov skrinshoti</h2><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Yopish"><?= icon('x') ?></button></div>
-    <img alt="To'lov skrinshoti">
-    <div class="row gap-2 mt-3" style="justify-content:flex-end"><a class="btn btn-sm" id="proofOpen" href="#" target="_blank" rel="noopener"><?= icon('external-link', 'i-sm') ?> Yangi oynada ochish</a></div>
+    <div class="modal-head"><h2 class="modal-title" id="pvTitle">To'lov isboti</h2><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Yopish"><?= icon('x') ?></button></div>
+    <img alt="To'lov isboti" id="pvImg">
+    <div class="pv-file" id="pvFile" hidden><span class="icon-tile primary" style="width:56px;height:56px;border-radius:18px"><?= icon('file-text', 'i-lg') ?></span><div class="grow" style="min-width:0"><b id="pvName" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">fayl</b><span class="fs-sm text-3" id="pvKind">PDF hujjat</span></div></div>
+    <div class="row gap-2 mt-3 row-wrap" style="justify-content:flex-end">
+      <a class="btn btn-sm" id="proofDl" href="#"><?= icon('download', 'i-sm') ?> Yuklab olish</a>
+      <a class="btn btn-sm btn-primary" id="proofOpen" href="#" target="_blank" rel="noopener"><?= icon('external-link', 'i-sm') ?> Yangi oynada ochish</a>
+    </div>
   </div>
 </dialog>
 <?php endif; ?>
@@ -314,7 +318,7 @@ function journal_meta(string $a): array {
     $m = [
         'login' => ['Tizimga kirdi', 'log-in', 'primary'], 'logout' => ['Tizimdan chiqdi', 'log-out', ''],
         'tx.create' => ["Tranzaksiya qo'shildi", 'plus', 'in'],
-        'tx.proof' => ['Skrinshot biriktirildi', 'image-plus', 'primary'], 'tx.proof_remove' => ["Skrinshot o'chirildi", 'image-off', 'warn'], 'tx.update' => ['Tranzaksiya tahrirlandi', 'pencil', 'warn'],
+        'tx.proof' => ['Isbot biriktirildi', 'image-plus', 'primary'], 'tx.proof_remove' => ["Isbot o'chirildi", 'image-off', 'warn'], 'tx.update' => ['Tranzaksiya tahrirlandi', 'pencil', 'warn'],
         'tx.delete' => ["Tranzaksiya o'chirildi", 'trash-2', 'danger'], 'tx.delete_restored' => ["Tranzaksiya o'chirilgan (qaytarilgan)", 'undo-2', ''],
         'tx.restore' => ['Tranzaksiya qaytarildi', 'undo-2', 'in'],
         'branch.create' => ['Filial yaratildi', 'store', 'in'], 'branch.update' => ['Filial tahrirlandi', 'store', 'warn'],

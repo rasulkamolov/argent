@@ -174,11 +174,11 @@ function rl_render_filters(PDO $conn, array $f, string $action, array $hidden = 
             <option value="0">Hammasi</option>
             <?php foreach ($users as $u): ?><option value="<?= (int)$u['id'] ?>" <?= $f['user'] === (int)$u['id'] ? 'selected' : '' ?>><?= e($u['username']) ?></option><?php endforeach; ?>
           </select></div>
-        <div class="field"><label class="label" for="fProof">Skrinshot (Click/Bank)</label>
+        <div class="field"><label class="label" for="fProof">Isbot (Click/Bank)</label>
           <select class="select input-sm" id="fProof" name="proof">
             <option value="">Hammasi</option>
-            <option value="missing" <?= $f['proof'] === 'missing' ? 'selected' : '' ?>>Skrinshotsiz</option>
-            <option value="has" <?= $f['proof'] === 'has' ? 'selected' : '' ?>>Skrinshotli</option>
+            <option value="missing" <?= $f['proof'] === 'missing' ? 'selected' : '' ?>>Isbotsiz</option>
+            <option value="has" <?= $f['proof'] === 'has' ? 'selected' : '' ?>>Isbotli</option>
           </select></div>
         <?php if ($withSearch): ?>
         <div class="field"><label class="label" for="fQ">Izoh bo'yicha qidirish</label>

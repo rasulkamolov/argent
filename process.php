@@ -91,13 +91,13 @@ if ($action === 'add_transaction') {
     // payment screenshot (Click / Bank only)
     $proof = null;
     if ($method !== 'cash') {
-        [$proof, $perr] = proof_save($_FILES['proof'] ?? null, $bid);
+        [$proof, $perr, $proofName] = proof_save($_FILES['proof'] ?? null, $bid);
         if ($perr) done('index.php', $perr, 'error');
-        if (!$proof && proof_required($bid)) done('index.php', "Click/Bank uchun to'lov skrinshotini biriktiring.", 'error');
+        if (!$proof && proof_required($bid)) done('index.php', "Click/Bank uchun to'lov isbotini (skrinshot yoki PDF) biriktiring.", 'error');
     }
-    db()->prepare("INSERT INTO transactions (branch_id, user_id, category_id, employee_id, payment, cash, click, bank, cash_in, cash_out, comment, date, proof)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
-        ->execute([$bid, $meId, $catId ?: null, $empId, $payment, $method === 'cash' ? 1 : 0, $method === 'click' ? 1 : 0, $method === 'bank' ? 1 : 0, $in, 1 - $in, $comment, $date, $proof]);
+    db()->prepare("INSERT INTO transactions (branch_id, user_id, category_id, employee_id, payment, cash, click, bank, cash_in, cash_out, comment, date, proof, proof_name)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        ->execute([$bid, $meId, $catId ?: null, $empId, $payment, $method === 'cash' ? 1 : 0, $method === 'click' ? 1 : 0, $method === 'bank' ? 1 : 0, $in, 1 - $in, $comment, $date, $proof, $proof ? $proofName : null]);
     $id = (int)db()->lastInsertId();
     audit('tx.create', 'transaction', $id, ['amount' => $payment, 'type' => $type, 'method' => $method, 'date' => $date, 'proof' => (bool)$proof], $bid);
     done('index.php' . ($date !== date('Y-m-d') ? '?date=' . $date : ''), ($in ? "Kirim" : "Chiqim") . " saqlandi: " . ($in ? '+' : '−') . number_format($payment, 0, '.', ' '));
@@ -108,27 +108,27 @@ if ($action === 'attach_proof') {
     $back = $t ? 'index.php?date=' . urlencode($t['date']) : 'index.php';
     if (!$t || $t['cash'] && !$t['click'] && !$t['bank']) done($back, "Tranzaksiya topilmadi yoki naqd (skrinshot kerak emas).", 'error');
     $has = !empty($t['proof']);
-    if ($has && !(is_admin() || is_manager())) done($back, "Skrinshot allaqachon biriktirilgan. Almashtirish faqat menejer/administratorga ruxsat.", 'error');
-    [$new, $perr] = proof_save($_FILES['proof'] ?? null, (int)$t['branch_id']);
-    if ($perr || !$new) done($back, $perr ?: "Rasmni tanlang.", 'error');
-    db()->prepare("UPDATE transactions SET proof = ? WHERE id = ?")->execute([$new, $t['id']]);
+    if ($has && !(is_admin() || is_manager())) done($back, "Isbot allaqachon biriktirilgan. Almashtirish faqat menejer/administratorga ruxsat.", 'error');
+    [$new, $perr, $newName] = proof_save($_FILES['proof'] ?? null, (int)$t['branch_id']);
+    if ($perr || !$new) done($back, $perr ?: "Faylni tanlang.", 'error');
+    db()->prepare("UPDATE transactions SET proof = ?, proof_name = ? WHERE id = ?")->execute([$new, $newName, $t['id']]);
     db()->prepare("INSERT INTO transaction_history (transaction_id, user_id, field_name, old_value, new_value, changed_at) VALUES (?,?,?,?,?,datetime('now','localtime'))")
-        ->execute([$t['id'], $meId, 'Skrinshot', $has ? 'eski rasm' : "yo'q", $has ? 'almashtirildi' : 'biriktirildi']);
+        ->execute([$t['id'], $meId, 'Isbot (fayl)', $has ? 'eski fayl' : "yo'q", $has ? 'almashtirildi' : 'biriktirildi']);
     if ($has) proof_delete($t['proof']);
     audit('tx.proof', 'transaction', (int)$t['id'], ['replaced' => $has], (int)$t['branch_id']);
-    done($back, $has ? "Skrinshot almashtirildi" : "Skrinshot biriktirildi");
+    done($back, $has ? "Isbot almashtirildi" : "Isbot biriktirildi");
 }
 if ($action === 'remove_proof') {
     $t = tx_authorized(pint('id'));
     $back = $t ? 'index.php?date=' . urlencode($t['date']) : 'index.php';
     if (!$t || !(is_admin() || is_manager())) done($back, "Ruxsat yo'q.", 'error');
     if (!empty($t['proof'])) {
-        db()->prepare("UPDATE transactions SET proof = NULL WHERE id = ?")->execute([$t['id']]);
-        db()->prepare("INSERT INTO transaction_history (transaction_id, user_id, field_name, old_value, new_value, changed_at) VALUES (?,?,?,?,?,datetime('now','localtime'))")->execute([$t['id'], $meId, 'Skrinshot', 'bor', "o'chirildi"]);
+        db()->prepare("UPDATE transactions SET proof = NULL, proof_name = NULL WHERE id = ?")->execute([$t['id']]);
+        db()->prepare("INSERT INTO transaction_history (transaction_id, user_id, field_name, old_value, new_value, changed_at) VALUES (?,?,?,?,?,datetime('now','localtime'))")->execute([$t['id'], $meId, 'Isbot (fayl)', 'bor', "o'chirildi"]);
         proof_delete($t['proof']);
         audit('tx.proof_remove', 'transaction', (int)$t['id'], null, (int)$t['branch_id']);
     }
-    done($back, "Skrinshot o'chirildi");
+    done($back, "Isbot o'chirildi");
 }
 
 if ($action === 'delete_transaction') {
@@ -148,7 +148,7 @@ if ($action === 'restore_transaction') {
     $st->execute([pint('id')]); $log = $st->fetch();
     $snap = $log ? json_decode((string)$log['details'], true) : null;
     if (!is_array($snap) || empty($snap['branch_id'])) done('admin.php#journal', "Qaytarib bo'lmaydi.", 'error');
-    $cols = ['id','branch_id','user_id','category_id','employee_id','payment','cash','click','bank','cash_in','cash_out','comment','date','is_modified','created_at','ext_ref','proof'];
+    $cols = ['id','branch_id','user_id','category_id','employee_id','payment','cash','click','bank','cash_in','cash_out','comment','date','is_modified','created_at','ext_ref','proof','proof_name'];
     $exists = db()->prepare("SELECT COUNT(*) FROM transactions WHERE id = ?"); $exists->execute([$snap['id'] ?? 0]);
     if ($exists->fetchColumn()) unset($snap['id']);
     $use = array_values(array_filter($cols, function ($c) use ($snap) { return array_key_exists($c, $snap); }));

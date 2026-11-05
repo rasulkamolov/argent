@@ -98,9 +98,13 @@ ui_start('daily');
   <?php if ($trans['click'] || $trans['bank']): $hasProof = !empty($trans['proof']); $mayReplace = is_admin() || is_manager(); ?>
   <section class="card card-pad stack" style="margin-top:16px" aria-labelledby="prTitle">
     <div class="row"><span class="icon-tile <?= $hasProof ? 'in' : 'out' ?>"><?= icon($hasProof ? 'image' : 'image-off') ?></span>
-      <div class="grow"><h2 class="card-title" id="prTitle">To'lov skrinshoti</h2><p class="fs-sm text-3"><?= $hasProof ? "Biriktirilgan — to'lov isboti sifatida saqlanadi" : "Hali biriktirilmagan" ?></p></div></div>
+      <div class="grow"><h2 class="card-title" id="prTitle">To'lov isboti</h2><p class="fs-sm text-3"><?= $hasProof ? "Biriktirilgan — to'lov isboti sifatida saqlanadi" : "Hali biriktirilmagan" ?></p></div></div>
     <?php if ($hasProof): ?>
-      <button type="button" class="proof-thumb" data-proof-view="<?= (int)$trans['id'] ?>" style="padding:0;cursor:zoom-in" aria-label="Skrinshotni kattalashtirish"><img src="proof.php?id=<?= (int)$trans['id'] ?>" alt="To'lov skrinshoti" loading="lazy"></button>
+      <?php $pi = proof_info($trans['proof']); if ($pi['kind'] === 'image'): ?>
+      <button type="button" class="proof-thumb" <?= proof_attrs($trans) ?> style="padding:0;cursor:zoom-in" aria-label="Skrinshotni kattalashtirish"><img src="proof.php?id=<?= (int)$trans['id'] ?>" alt="To'lov skrinshoti" loading="lazy"></button>
+      <?php else: ?>
+      <button type="button" class="proof-filecard" <?= proof_attrs($trans) ?>><span class="pd-filetile"><?= icon('file-text', 'i-lg') ?></span><span class="grow"><b><?= e($trans['proof_name'] ?: 'fayl') ?></b><small><?= strtoupper(e($pi['ext'])) ?> · ochish / yuklab olish</small></span><?= icon('chevron-right', 'i-sm') ?></button>
+      <?php endif; ?>
     <?php endif; ?>
     <?php if (!$hasProof || $mayReplace): ?>
     <form action="process.php" method="post" enctype="multipart/form-data" class="stack" data-loading>
@@ -110,7 +114,7 @@ ui_start('daily');
     </form>
     <?php endif; ?>
     <?php if ($hasProof && $mayReplace): ?>
-    <a class="btn btn-danger-soft btn-sm" data-post href="process.php?action=remove_proof&id=<?= (int)$trans['id'] ?>" data-confirm="Skrinshot o'chiriladi." data-confirm-title="Skrinshotni o'chirasizmi?" data-confirm-ok="O'chirish"><?= icon('trash-2', 'i-sm') ?> Skrinshotni o'chirish</a>
+    <a class="btn btn-danger-soft btn-sm" data-post href="process.php?action=remove_proof&id=<?= (int)$trans['id'] ?>" data-confirm="Isbot fayli o'chiriladi." data-confirm-title="Isbotni o'chirasizmi?" data-confirm-ok="O'chirish"><?= icon('trash-2', 'i-sm') ?> Isbotni o'chirish</a>
     <?php endif; ?>
   </section>
   <?php endif; ?>
