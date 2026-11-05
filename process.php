@@ -164,6 +164,7 @@ if ($action === 'restore_transaction') {
 
 /* -------------------------------------------------------------- cash count */
 if ($action === 'add_cash_count') {
+    if (!is_admin() && !is_manager()) done('index.php', "Bu amal kassirlar uchun yopiq.", 'error');
     $bid = is_admin() ? (pint('branch_id') ?: scope_branch()) : (int)$me['branch_id'];
     if (!$bid || !can_access_branch($bid)) done('kassa.php', "Filialni tanlang.", 'error');
     if (!branch_tracked($bid)) done('kassa.php', "Bu filialda kassa qoldig'i sozlanmagan (Admin → Filiallar).", 'error');

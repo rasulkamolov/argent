@@ -1,7 +1,7 @@
 <?php
 require_once __DIR__ . '/layout.php';
 require_once __DIR__ . '/report_lib.php';
-require_login();
+require_manager();                                         // cashiers have no cash book
 
 $f = rl_filters();
 $branch = (int)$f['branch'];                               // 0 = all (admin only)

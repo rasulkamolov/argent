@@ -211,7 +211,7 @@ ui_start('daily');
             <span class="fw-7"><?= $tracked ? 'Jami qoldiq' : 'Kun natijasi' ?></span>
             <span class="fw-8 num text-primary" style="font-size:18px"><?= e(fmt_signed($tracked ? $close['total'] : $day_net)) ?></span>
           </div>
-          <?php if ($scope && $is_today && $tracked): ?><a class="btn btn-soft btn-block" href="kassa.php"><?= icon('calculator', 'i-sm') ?> Kassani sanash</a><?php endif; ?>
+          <?php if ($scope && $is_today && $tracked && (is_admin() || is_manager())): ?><a class="btn btn-soft btn-block" href="kassa.php"><?= icon('calculator', 'i-sm') ?> Kassani sanash</a><?php endif; ?>
         </div>
       </section>
       <?php if ($all_mode && $by_branch): ?>

@@ -143,7 +143,6 @@ function ui_nav_items(): array {
     ];
     return [
         ['daily', 'index.php', 'Kunlik', 'calendar-days', 'Kunlik hisob', true, []],
-        ['cashbook', 'kassa.php', 'Kassa', 'wallet', 'Kassa kitobi', true, []],
         ['profile', 'profile.php', 'Profil', 'user-round', 'Profil', true, []],
     ];
 }

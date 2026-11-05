@@ -130,6 +130,8 @@ function can_view_reports(): bool { return is_admin() || is_manager(); }
 function role_label(?string $r): string { return ROLE_LABELS[$r] ?? (string)$r; }
 
 function require_login(): void { if (!auth_user()) { header('Location: index.php'); exit; } }
+/** Admins and branch managers only (cashiers are sent back to the daily page). */
+function require_manager(): void { require_login(); if (!is_admin() && !is_manager()) { flash_set('error', "Bu bo'lim kassirlar uchun yopiq."); header('Location: index.php'); exit; } }
 function require_admin(): void { require_login(); if (!is_admin()) { flash_set('error', "Bu bo'lim faqat administrator uchun."); header('Location: index.php'); exit; } }
 function require_reports(): void { require_login(); if (!can_view_reports()) { flash_set('error', "Hisobotlar kassirlar uchun yopiq."); header('Location: index.php'); exit; } }
 
