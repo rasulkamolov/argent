@@ -1,0 +1,5 @@
+# runtime files created on the server (sessions, backups, import previews)
+data/
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
