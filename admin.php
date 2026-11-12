@@ -3,6 +3,7 @@ require_once __DIR__ . '/layout.php';
 require_once __DIR__ . '/report_lib.php';
 require_once __DIR__ . '/proofs.php';
 require_once __DIR__ . '/lcup_report.php';
+require_once __DIR__ . '/shop_report.php';
 require_admin();
 lcup_remember_app_url();
 lcup_stale_check();
@@ -50,6 +51,8 @@ foreach ($B as $b) { if ($b['is_active'] && empty($ov[$b['id']]['cashiers']) && 
 foreach ($B as $b) { if ($b['is_active'] && empty($ov[$b['id']]['tracked'])) { $alerts[] = ['warn', "«" . $b['name'] . "» filialida kassa qoldig'i sozlanmagan: kassadagi pul va «Kassani sanash» ishlamaydi.", '#branches', "Sozlash"]; } }
 if (!db_is_private()) $alerts[] = ['warn', "Baza fayli public_html ichida turibdi. Uni xavfsiz joyga ko'chiring (faqat .htaccess himoya qilyapti).", 'admin.php#lcup', "Ko'chirish"];
 if (lcup_unread_count() > 0) $alerts[] = ['danger', lcup_unread_count() . " ta ko'rilmagan LC-UP ogohlantirish (qizil hodisa).", 'lcup.php?status=unread', "Ko'rish"];
+if (shop_unread_count() > 0) $alerts[] = ['danger', shop_unread_count() . " ta ko'rilmagan Do'kon ogohlantirish (qizil hodisa).", 'shop.php?status=unread', "Ko'rish"];
+$shMin = shop_minutes_since_run(); if ($shMin !== null && $shMin >= 10 && shop_setting('enabled') === '1') $alerts[] = ['danger', "Do'kon monitoringi $shMin daqiqadan beri ishlamayapti.", 'admin.php#shop', "Tekshirish"];
 $lcMin = lcup_minutes_since_run(); if ($lcMin !== null && $lcMin >= 10) $alerts[] = ['danger', "LC-UP sinxronizatsiya $lcMin daqiqadan beri ishlamayapti.", 'admin.php#lcup', "Tekshirish"];
 $expo = web_exposure_check();
 if (!empty($expo)) $alerts[] = ['danger', "XAVFLI: internetdan ochiq yuklab olish mumkin: " . implode('; ', $expo) . ". Hostingda .htaccess fayli ishlayotganini tekshiring (yoki faylni public_html dan tashqariga ko'chiring).", 'admin.php#settings', "Batafsil"];
@@ -84,6 +87,7 @@ ui_start('admin');
       <button class="tab" role="tab" data-tab="categories" id="t-categories" aria-controls="p-categories"><?= icon('tags', 'i-sm') ?> Kategoriyalar <span class="tab-count"><?= count($categories) ?></span></button>
       <button class="tab" role="tab" data-tab="journal" id="t-journal" aria-controls="p-journal"><?= icon('history', 'i-sm') ?> Jurnal <span class="tab-count"><?= fmt($jtotal) ?></span></button>
       <button class="tab" role="tab" data-tab="lcup" id="t-lcup" aria-controls="p-lcup"><?= icon('radar', 'i-sm') ?> LC-UP<?= lcup_unread_count() ? ' <span class="tab-count">' . lcup_unread_count() . '</span>' : '' ?></button>
+      <button class="tab" role="tab" data-tab="shop" id="t-shop" aria-controls="p-shop"><?= icon('receipt', 'i-sm') ?> Do'kon<?= shop_unread_count() ? ' <span class="tab-count">' . shop_unread_count() . '</span>' : '' ?></button>
       <button class="tab" role="tab" data-tab="settings" id="t-settings" aria-controls="p-settings"><?= icon('settings', 'i-sm') ?> Sozlamalar</button>
     </div>
 
@@ -94,6 +98,7 @@ ui_start('admin');
     <div class="tabpanel stack" role="tabpanel" id="p-categories" aria-labelledby="t-categories" hidden><?php include __DIR__ . '/admin_parts/categories.php'; ?></div>
     <div class="tabpanel stack" role="tabpanel" id="p-journal" aria-labelledby="t-journal" hidden><?php include __DIR__ . '/admin_parts/journal.php'; ?></div>
     <div class="tabpanel stack" role="tabpanel" id="p-lcup" aria-labelledby="t-lcup" hidden><?php include __DIR__ . '/admin_parts/lcup.php'; ?></div>
+    <div class="tabpanel stack" role="tabpanel" id="p-shop" aria-labelledby="t-shop" hidden><?php include __DIR__ . '/admin_parts/shop.php'; ?></div>
     <div class="tabpanel stack" role="tabpanel" id="p-settings" aria-labelledby="t-settings" hidden><?php include __DIR__ . '/admin_parts/settings.php'; ?></div>
   </div>
 </div>

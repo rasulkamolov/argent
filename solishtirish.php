@@ -6,6 +6,7 @@
 require_once __DIR__ . '/layout.php';
 require_once __DIR__ . '/lcup_lib.php';
 require_admin();
+if (($_GET['tab'] ?? '') === 'shop') { require __DIR__ . '/shop_view_recon.php'; exit; }   // Do'kon tab (Do'konPro ↔ Argent)
 
 $B = branches_all(); $mapIds = lcup_branch_ids();
 $view = ($_GET['view'] ?? 'day') === 'month' ? 'month' : 'day';
@@ -49,7 +50,7 @@ ui_head('Solishtirish'); ui_start('recon');
     <div><h1 class="page-title">Solishtirish</h1><p class="page-sub">LC-UP to'lovlari (yaratilgan vaqti bo'yicha) va Argent «To'lov» yozuvlari — talaba ID bo'yicha</p></div>
     <div class="row gap-2 no-print row-wrap"><a class="btn btn-success" href="<?= e($q(['export' => 1])) ?>"><?= icon('download', 'i-sm') ?> Excel (CSV)</a></div>
   </div>
-  <?php ui_lcup_subnav('recon'); ?>
+  <?php ui_lcup_subnav('recon'); ui_recon_tabs('lcup'); ?>
 
   <form method="get" action="solishtirish.php" class="card card-pad no-print" style="margin-bottom:14px">
     <div class="row row-wrap" style="gap:8px;align-items:end">

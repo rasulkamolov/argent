@@ -12,7 +12,7 @@ if (!defined('DB_FILE')) {
     define('DB_FILE', db_resolve_file());
 }
 if (!defined('DEFAULT_BRANCH_NAME')) define('DEFAULT_BRANCH_NAME', "OXFORD Bo'zqal'a");
-const DB_SCHEMA_VERSION = 8;   // v2: multi-branch, v3: balance_ok, v4/v5: proof, v6: LC-UP monitoring, v7: whitelist log, charges, gaps, v8: student history (minus-payment edits)
+const DB_SCHEMA_VERSION = 9;   // v9: Do'konPro monitoring, v2: multi-branch, v3: balance_ok, v4/v5: proof, v6: LC-UP monitoring, v7: whitelist log, charges, gaps, v8: student history (minus-payment edits)
 
 function db_has_column(PDO $c, string $table, string $col): bool {
     foreach ($c->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -257,6 +257,92 @@ function db_migrate(PDO $c): void {
             $ox = $c->query("SELECT id FROM branches WHERE name LIKE 'OXFORD%' ORDER BY id LIMIT 1")->fetchColumn();
             if ($yb) $m->execute([$yb, '414', 'Oxford LC']);
             if ($ox) $m->execute([$ox, '', "Oxford Bo'zqal'a"]);
+        }
+
+        /* ---- v9: Do'konPro (shop) monitoring. The shop database itself is only ever READ (mode=ro); everything below lives in Argent's own DB. ---- */
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_branch_map (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id INTEGER NOT NULL UNIQUE,      -- Argent branch
+            shop_branch_id INTEGER,                 -- Do'konPro branches.id (empty = found by name)
+            shop_name TEXT DEFAULT '',              -- Do'konPro branch name
+            is_active INTEGER DEFAULT 1
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_state (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            detected_at TEXT NOT NULL,              -- when Argent noticed it (local time)
+            event_time TEXT,                        -- when it happened according to the shop (local time), NULL if unknown
+            event_date TEXT,
+            branch_id INTEGER, shop_branch_id INTEGER,
+            type TEXT, staff TEXT, ref TEXT, ref_key TEXT,   -- ref = human reference (chek #12), ref_key = machine key (sale:77)
+            amount REAL, details TEXT, before_json TEXT, after_json TEXT,
+            severity TEXT DEFAULT 'info',           -- 'red' | 'yellow' | 'info'
+            flags TEXT DEFAULT '',
+            backfill INTEGER DEFAULT 0,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            alerted_at TEXT,
+            reviewed_at TEXT, reviewed_by INTEGER, review_note TEXT
+        )");
+        $c->exec("CREATE TRIGGER IF NOT EXISTS shop_events_nodelete BEFORE DELETE ON shop_events
+            BEGIN SELECT RAISE(ABORT, 'shop_events: yozuvlarni o''chirib bo''lmaydi'); END");
+        $c->exec("CREATE TRIGGER IF NOT EXISTS shop_events_noupdate BEFORE UPDATE ON shop_events
+            WHEN OLD.id IS NOT NEW.id OR OLD.detected_at IS NOT NEW.detected_at OR OLD.event_time IS NOT NEW.event_time OR OLD.event_date IS NOT NEW.event_date
+              OR OLD.branch_id IS NOT NEW.branch_id OR OLD.shop_branch_id IS NOT NEW.shop_branch_id OR OLD.type IS NOT NEW.type OR OLD.staff IS NOT NEW.staff
+              OR OLD.ref IS NOT NEW.ref OR OLD.ref_key IS NOT NEW.ref_key OR OLD.amount IS NOT NEW.amount OR OLD.details IS NOT NEW.details
+              OR OLD.before_json IS NOT NEW.before_json OR OLD.after_json IS NOT NEW.after_json OR OLD.severity IS NOT NEW.severity OR OLD.flags IS NOT NEW.flags
+              OR OLD.backfill IS NOT NEW.backfill OR OLD.dedupe_key IS NOT NEW.dedupe_key
+              OR (OLD.reviewed_at IS NOT NULL AND (NEW.reviewed_at IS NOT OLD.reviewed_at OR NEW.reviewed_by IS NOT OLD.reviewed_by OR NEW.review_note IS NOT OLD.review_note))
+              OR (OLD.alerted_at IS NOT NULL AND NEW.alerted_at IS NOT OLD.alerted_at)
+            BEGIN SELECT RAISE(ABORT, 'shop_events: yozuvlarni o''zgartirib bo''lmaydi'); END");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_shev_time ON shop_events(detected_at)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_shev_branch ON shop_events(branch_id, event_date)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_shev_unread ON shop_events(severity, reviewed_at, backfill)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_shev_ref ON shop_events(ref_key, type)");
+        // snapshots of what the shop looked like at the last run (used to see what changed or disappeared; the shop keeps no audit log)
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_sales (
+            sale_id INTEGER PRIMARY KEY, shop_branch_id INTEGER, receipt_no INTEGER, customer_id INTEGER, seller_id INTEGER,
+            sale_date TEXT, sale_time TEXT, total REAL, discount REAL, paid REAL, returned_amount REAL, payment_type TEXT, status TEXT, note TEXT,
+            items_hash TEXT, items_txt TEXT, dp_sum REAL DEFAULT 0, ret_sum REAL DEFAULT 0, first_seen TEXT, last_seen TEXT, baseline INTEGER DEFAULT 0, deleted_at TEXT
+        )");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_shsale_branch ON shop_sales(shop_branch_id, receipt_no)");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_products (
+            product_id INTEGER PRIMARY KEY, shop_branch_id INTEGER, name TEXT, category_id INTEGER, sell_price REAL, buy_price REAL, stock REAL,
+            deleted INTEGER DEFAULT 0, active INTEGER DEFAULT 1, last_seen TEXT
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_users (
+            user_id INTEGER PRIMARY KEY, name TEXT, username TEXT, role TEXT, active INTEGER, shop_branch_id INTEGER,
+            blocked_at TEXT,                         -- when Argent first saw the account blocked (sales made before that are not flagged)
+            first_seen TEXT, last_seen TEXT
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_customers (
+            customer_id INTEGER PRIMARY KEY, shop_branch_id INTEGER, name TEXT, phone TEXT, note TEXT, address TEXT, first_seen TEXT, baseline INTEGER DEFAULT 0
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_purchases (
+            purchase_id INTEGER PRIMARY KEY, shop_branch_id INTEGER, purchase_date TEXT, total REAL, paid REAL, items_hash TEXT, items_txt TEXT, first_seen TEXT, last_seen TEXT
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_debtpay (
+            dp_id INTEGER PRIMARY KEY, sale_id INTEGER, shop_branch_id INTEGER, amount REAL, method TEXT, payment_date TEXT, created_at TEXT, user_id INTEGER, first_seen TEXT
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_transfers (          -- one row per \"chiqdi\" movement still waiting for its \"kirdi\" in the other branch
+            move_id INTEGER PRIMARY KEY, from_branch INTEGER, ref_id INTEGER, product_id INTEGER, product_name TEXT, qty REAL, created_at TEXT, staff TEXT, state TEXT DEFAULT 'open'
+        )");
+        // inventory control (blind count): a check picks products, the count is typed in WITHOUT seeing the system quantity
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_inv_checks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, branch_id INTEGER NOT NULL, shop_branch_id INTEGER, created_at TEXT, created_by INTEGER,
+            status TEXT DEFAULT 'open', completed_at TEXT, note TEXT
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS shop_inv_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, check_id INTEGER NOT NULL, product_id INTEGER, product_name TEXT, category TEXT, reason TEXT,
+            counted_qty REAL, counted_at TEXT, sys_qty REAL, buy_price REAL, sell_price REAL, diff_qty REAL, diff_cost REAL, diff_sale REAL
+        )");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_shinv_check ON shop_inv_items(check_id)");
+        // suggested mapping (editable in Admin → Do'kon): Asosiy filial = Yangibozor Markaz, Oxford Bozqala = OXFORD Bo'zqal'a
+        if ((int)$c->query("SELECT COUNT(*) FROM shop_branch_map")->fetchColumn() === 0) {
+            $m = $c->prepare("INSERT OR IGNORE INTO shop_branch_map (branch_id, shop_name) VALUES (?,?)");
+            $yb = $c->query("SELECT id FROM branches WHERE name = 'Yangibozor Markaz'")->fetchColumn();
+            $ox = $c->query("SELECT id FROM branches WHERE name LIKE 'OXFORD%' ORDER BY id LIMIT 1")->fetchColumn();
+            if ($yb) $m->execute([$yb, 'Asosiy filial']);
+            if ($ox) $m->execute([$ox, 'Oxford Bozqala']);
         }
 
         // screenshots are only demanded for transactions dated from the day this feature went live

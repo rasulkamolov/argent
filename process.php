@@ -352,6 +352,76 @@ if (is_admin()) {
         done($A . '#categories', "Kategoriya o'chirildi");
     }
 
+    /* ---- Do'konPro monitoring (the shop database is only ever read) ---- */
+    if ($action === 'shop_review') {
+        require_once __DIR__ . '/shop_lib.php'; $ids = array_filter(array_map('intval', explode(',', pstr('ids')))); $n = 0;
+        foreach (array_slice($ids, 0, 100) as $id) if (shop_review($id, $meId, pstr('note'))) $n++;
+        audit('shop.review', 'shop', null, ['count' => $n]);
+        done(safe_back(pstr('back'), 'shop.php'), $n ? "$n ta hodisa «ko'rildi» deb belgilandi" : "Belgilanadigan hodisa topilmadi (allaqachon ko'rilgan)", $n ? 'ok' : 'error');
+    }
+    if ($action === 'shop_config_save') {
+        require_once __DIR__ . '/shop_lib.php'; $back = $A . '#shop'; $path = trim((string)($_POST['shop_db_path'] ?? ''));
+        if ($path !== '') {
+            if ($path[0] !== '/' && !preg_match('~^[A-Za-z]:[\\\\/]~', $path)) done($back, "Yo'l to'liq (absolyut) bo'lishi kerak, masalan /home/u…/domains/…/public_html/shop/db/bookshop.db", 'error');
+            if (!is_file($path)) done($back, "Bunday fayl topilmadi: $path", 'error');
+            if (!is_readable($path)) done($back, "Fayl o'qishga ochiq emas (huquq): $path", 'error');
+            if (!preg_match('/\.(db|sqlite|sqlite3)$/i', $path)) done($back, "Fayl kengaytmasi .db / .sqlite bo'lishi kerak", 'error');
+        }
+        [$ok, $msg] = private_config_write(['SHOP_DB_PATH' => $path]); if (!$ok) done($back, $msg, 'error');
+        audit('shop.config', 'shop', null, ['field' => 'SHOP_DB_PATH']);
+        shop_event_add(['type' => 'system', 'severity' => 'info', 'staff' => $me['username'] ?? '', 'details' => "Do'konPro baza yo'li o'zgartirildi (SHOP_DB_PATH)", 'dedupe_key' => 'cfg|' . bin2hex(random_bytes(8))]);
+        done($back, $path === '' ? "Yo'l o'chirildi (standart joylar qidiriladi)" : "Baza yo'li saqlandi");
+    }
+    if ($action === 'shop_save_map') {
+        require_once __DIR__ . '/shop_lib.php';
+        foreach ((array)($_POST['name'] ?? []) as $bid => $nm) {
+            $id = (int)$bid; if (!branch_get($id)) continue; $nm = mb_substr(trim((string)$nm), 0, 120); $on = !empty($_POST['on'][$bid]) ? 1 : 0;
+            if ($nm === '') { db()->prepare("DELETE FROM shop_branch_map WHERE branch_id = ?")->execute([$id]); continue; }
+            db()->prepare("INSERT INTO shop_branch_map (branch_id, shop_name, shop_branch_id, is_active) VALUES (?,?,NULL,?) ON CONFLICT(branch_id) DO UPDATE SET shop_name = excluded.shop_name, shop_branch_id = NULL, is_active = excluded.is_active")->execute([$id, $nm, $on]);
+        }
+        audit('shop.map', 'shop'); done($A . '#shop', "Filial moslash saqlandi");
+    }
+    if ($action === 'shop_save_settings') {
+        require_once __DIR__ . '/shop_lib.php';
+        $num = function ($k, $min, $max) { return (string)max($min, min($max, (int)preg_replace('/\D+/', '', pstr($k)))); };
+        $dec = function ($k, $min, $max) { return (string)max($min, min($max, (float)str_replace(',', '.', pstr($k)))); };
+        $tm = function ($k, $d) { return preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', pstr($k)) ? pstr($k) : $d; };
+        $txt = function ($k, $d) { $v = mb_substr(trim(pstr($k)), 0, 200); return $v !== '' ? $v : $d; };
+        $def = shop_defaults();
+        foreach (['kitob_category' => $txt('kitob_category', $def['kitob_category']), 'argent_shop_cat' => $txt('argent_shop_cat', $def['argent_shop_cat']), 'argent_kitob_cat' => $txt('argent_kitob_cat', $def['argent_kitob_cat']), 'argent_pay_cat' => $txt('argent_pay_cat', $def['argent_pay_cat']), 'keywords' => $txt('keywords', $def['keywords']),
+                 'work_from' => $tm('work_from', '08:00'), 'work_to' => $tm('work_to', '21:00'), 'eod_time' => $tm('eod_time', '21:00'), 'recon_next_time' => $tm('recon_next_time', '10:00'),
+                 'return_late_min' => $num('return_late_min', 1, 1440), 'small_debt' => $num('small_debt', 0, 100000000), 'cost_jump_pct' => $num('cost_jump_pct', 1, 1000), 'transfer_wait_h' => $num('transfer_wait_h', 1, 168), 'window_days' => $num('window_days', 14, 365),
+                 'inv_count' => $num('inv_count', 5, 10), 'inv_top_days' => $num('inv_top_days', 7, 365), 'tolerance' => $num('tolerance', 0, 100000), 'late_entry_days' => $num('late_entry_days', 1, 30),
+                 'pat_low_ratio' => $dec('pat_low_ratio', 0.1, 1), 'pat_high_ratio' => $dec('pat_high_ratio', 1, 20), 'pat_min_events' => $num('pat_min_events', 1, 100),
+                 'enabled' => !empty($_POST['enabled']) ? '1' : '0', 'alerts_on' => !empty($_POST['alerts_on']) ? '1' : '0'] as $k => $val) setting_set('shop.' . $k, $val);
+        audit('shop.settings', 'shop'); shop_event_add(['type' => 'system', 'severity' => 'info', 'staff' => $me['username'] ?? '', 'details' => "Do'kon monitoring qoidalari/chegaralari o'zgartirildi" . (empty($_POST['alerts_on']) ? " (Telegram ogohlantirish O'CHIRILDI)" : ''), 'dedupe_key' => 'cfg|' . bin2hex(random_bytes(8))]);
+        done($A . '#shop', "Do'kon sozlamalari saqlandi");
+    }
+    if ($action === 'shop_run_now') {
+        require_once __DIR__ . '/shop_report.php'; @set_time_limit(120); session_write_close(); $r = shop_run(['trigger' => 'manual']); app_session_start(); audit('shop.run', 'shop', null, ['ok' => $r['ok']]);
+        done($A . '#shop', !empty($r['busy']) ? "Boshqa tekshiruv ishlayapti" : ($r['skipped'] ? "Tekshiruv o'tkazilmadi: " . ($r['skipped'] === 'config' ? "baza sozlanmagan" : "o'chirilgan") : ($r['ok'] ? "Tekshiruv tayyor: {$r['new_events']} yangi hodisa" . ($r['warnings'] ? ' · ogohlantirish: ' . implode(' | ', array_slice($r['warnings'], 0, 3)) : '') : "Xato: " . implode(' | ', $r['errors']))), (!empty($r['busy']) || $r['skipped'] || $r['ok']) ? 'ok' : 'error');
+    }
+    if ($action === 'shop_http_check') {
+        require_once __DIR__ . '/shop_lib.php'; $r = shop_http_exposure(); audit('shop.http_check', 'shop', null, ['result' => $r['state']]);
+        done($A . '#shop', $r['msg'], $r['state'] === 'open' ? 'error' : 'ok');
+    }
+    if ($action === 'shop_inv_start') {
+        require_once __DIR__ . '/shop_inv.php';
+        try { $id = shop_inv_start(pint('branch'), $meId); audit('shop.inv_start', 'shop', $id, null, pint('branch')); done('inventory_check.php#check' . $id, "Tekshiruv #$id tayyor: tovarlarni sanab, sonini kiriting"); }
+        catch (Throwable $e) { done('inventory_check.php', lcup_redact($e->getMessage()), 'error'); }
+    }
+    if ($action === 'shop_inv_save') {
+        require_once __DIR__ . '/shop_inv.php';
+        try { $n = shop_inv_save(pint('check'), (array)($_POST['count'] ?? []), $meId); audit('shop.inv_save', 'shop', pint('check'), ['items' => $n]);
+            $chk = db()->prepare("SELECT status FROM shop_inv_checks WHERE id = ?"); $chk->execute([pint('check')]); $done = $chk->fetchColumn() === 'done';
+            done($done ? 'inventory_check.php?check=' . pint('check') . '#h' . pint('check') : 'inventory_check.php#check' . pint('check'), $n ? "$n ta tovar saqlandi va tizim bilan solishtirildi" . ($done ? ". Tekshiruv yakunlandi." : '') : "Hech narsa saqlanmadi: sonlarni kiriting (0 yoki undan katta raqam)", $n ? 'ok' : 'error'); }
+        catch (Throwable $e) { done('inventory_check.php', lcup_redact($e->getMessage()), 'error'); }
+    }
+    if ($action === 'shop_inv_cancel') {
+        require_once __DIR__ . '/shop_inv.php'; $ok = shop_inv_cancel(pint('check')); audit('shop.inv_cancel', 'shop', pint('check'));
+        done('inventory_check.php', $ok ? "Tekshiruv bekor qilindi" : "Bekor qilib bo'lmadi", $ok ? 'ok' : 'error');
+    }
+
     /* ---- LC-UP monitoring ---- */
     if ($action === 'lcup_review') {
         $ids = array_filter(array_map('intval', explode(',', pstr('ids')))); $n = 0; require_once __DIR__ . '/lcup_lib.php';

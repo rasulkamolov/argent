@@ -1,6 +1,7 @@
 <?php
 /** Daily 21:00 summary and Monday weekly report (Telegram), and the "settings changed" record. Everything is computed from lcup_events. */
 require_once __DIR__ . '/lcup_lib.php';
+require_once __DIR__ . '/shop_lib.php';
 
 const LCUP_CATS = ['created' => ['payment_created'], 'edited' => ['payment_changed', 'amount_changed', 'log_edit'], 'deleted' => ['payment_deleted', 'log_delete'], 'discount' => ['discount_new', 'discount_changed', 'discount_removed'], 'debt' => ['debt_reduced', 'charge_changed']];
 const LCUP_CAT_LABEL = ['created' => 'yaratilgan', 'edited' => 'tahrirlangan', 'deleted' => "o'chirilgan", 'discount' => 'chegirma', 'debt' => 'qarz/oylik'];
@@ -33,6 +34,7 @@ function lcup_daily_report(string $date): array {
     $yn = (int)db()->query("SELECT COUNT(*) FROM lcup_events WHERE event_date = " . db()->quote($date) . " AND severity = 'yellow' AND backfill = 0")->fetchColumn();
     if ($yn) { $L[] = "\n🟡 <b>Kun davomida ($yn ta, faqat hisobotda):</b>"; foreach ($ys as $e) $L[] = "• " . date('H:i', strtotime($e['lcup_time'] ?: $e['detected_at'])) . ' ' . lcup_h(trim(($e['student_name'] ?: '') . ' — ' . mb_substr((string)$e['details'], 0, 90), ' —')); if ($yn > 15) $L[] = "… va yana " . ($yn - 15) . " ta"; }
     $gs = lcup_gaps_between($date, $date); if ($gs) $L[] = "\n⏸ Uzilishlar: " . lcup_h(implode('; ', array_map('lcup_gap_text', $gs)));
+    if (function_exists('shop_daily_lines')) foreach (shop_daily_lines($date) as $l) $L[] = $l;     // Do'konPro ↔ Argent
     return lcup_chunk($L);
 }
 /** Previous full Monday–Sunday week vs the week before it; sharp increases are flagged. */
@@ -59,6 +61,7 @@ function lcup_weekly_report(?string $today = null): array {
     $L[] = "\n🔴 Hafta davomida qizil hodisa: " . (int)$red->fetchColumn() . " · hozir ko'rilmagan: " . lcup_unread_count();
     $gs = lcup_gaps_between($curFrom, $curTo); if ($gs) $L[] = "⏸ Uzilishlar: " . lcup_h(implode('; ', array_map('lcup_gap_text', $gs)));
     $L[] = "\n⚠️ = shu hafta ≥3 ta va o'tgan haftadan kamida 2 baravar ko'p.";
+    if (function_exists('shop_weekly_lines')) { $L[] = "\n"; foreach (shop_weekly_lines($today) as $l) $L[] = $l; }       // Do'konPro: kamomad + sotuvchilar
     return lcup_chunk($L);
 }
 function lcup_chunk(array $lines, int $max = 3400): array {
@@ -86,3 +89,5 @@ function lcup_settings_changed(array $fields, ?array $oldTg = null): void {
     if ($oldTg && $oldTg[0] !== '' && ($oldTg[0] !== $nt || $oldTg[1] !== $nc))      // the OLD chat is told too: somebody who redirects alerts must not be able to do it silently
         lcup_tg_send("⚙️ <b>LC-UP monitoring sozlamalari o'zgartirildi</b>\nKim: " . lcup_h($by) . "\nMaydonlar: " . lcup_h(implode(', ', $fields)) . "\n⚠️ Telegram sozlamalari ham o'zgardi — ogohlantirishlar endi boshqa joyga ketishi mumkin.", $e, $oldTg);
 }
+
+require_once __DIR__ . '/shop_report.php';   // Do'konPro lines for the daily/weekly reports (circular include is fine: definitions only)

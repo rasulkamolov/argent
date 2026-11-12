@@ -134,6 +134,8 @@ function ui_nav_items(): array {
         ['cashbook', 'kassa.php', 'Kassa', 'wallet', 'Kassa kitobi', false, []],
         ['lcup', 'lcup.php', 'LC-UP', 'radar', 'LC-UP nazorat', true, ['recon']],
         ['recon', 'solishtirish.php', 'Solishtirish', 'scale', 'LC-UP solishtirish', false, []],
+        ['shop', 'shop.php', "Do'kon", 'receipt', "Do'kon nazorat", true, ['shopinv']],
+        ['shopinv', 'inventory_check.php', 'Inventar', 'clipboard-check', 'Inventarizatsiya tekshiruvi', false, []],
         ['admin', 'admin.php', 'Admin', 'settings', 'Admin panel', true, []],
     ];
     if ($role === 'manager') return [
@@ -190,6 +192,27 @@ function ui_unread(): int {
     if (!function_exists('lcup_unread_count')) { require_once __DIR__ . '/lcup_lib.php'; }
     return lcup_unread_count();
 }
+/** Number of unread red Do'konPro events (administrator only). */
+function ui_shop_unread(): int {
+    if (!is_admin()) return 0;
+    if (!function_exists('shop_unread_count')) { require_once __DIR__ . '/shop_lib.php'; }
+    return shop_unread_count();
+}
+/** Sub navigation of the Do'kon section. */
+function ui_shop_subnav(string $active): void {
+    ?><div class="subnav no-print" role="navigation" aria-label="Do'kon bo'limlari">
+  <a href="shop.php" <?= $active === 'shop' ? 'aria-current="page"' : '' ?>><?= icon('receipt', 'i-sm') ?> Nazorat</a>
+  <a href="solishtirish.php?tab=shop" <?= $active === 'recon' ? 'aria-current="page"' : '' ?>><?= icon('scale', 'i-sm') ?> Solishtirish</a>
+  <a href="inventory_check.php" <?= $active === 'inv' ? 'aria-current="page"' : '' ?>><?= icon('clipboard-check', 'i-sm') ?> Inventarizatsiya</a>
+  <a href="shop.php?view=report" <?= $active === 'report' ? 'aria-current="page"' : '' ?>><?= icon('chart-column', 'i-sm') ?> Haftalik hisobot</a>
+</div>
+<?php
+}
+/** Switch between the two reconciliations (students in LC-UP / the shop). */
+function ui_recon_tabs(string $active): void {
+    ?><div class="row no-print" style="gap:6px;margin:0 0 12px"><a class="chip" href="solishtirish.php" <?= $active === 'lcup' ? 'aria-current="true"' : '' ?>><?= icon('radar', 'i-xs') ?> Talabalar (LC-UP)</a><a class="chip" href="solishtirish.php?tab=shop" <?= $active === 'shop' ? 'aria-current="true"' : '' ?>><?= icon('receipt', 'i-xs') ?> Do'kon (Do'konPro)</a></div>
+<?php
+}
 /** Sub navigation of the LC-UP section. */
 function ui_lcup_subnav(string $active): void {
     ?><div class="subnav no-print" role="navigation" aria-label="LC-UP bo'limlari">
@@ -210,10 +233,11 @@ function ui_start(string $active, array $o = []): void {
     <?= ui_brand() ?>
     <?= ui_scope_switcher('card') ?>
     <?php if (is_admin() && ui_unread() > 0): ?><a class="side-alert" href="lcup.php?status=unread"><?= icon('siren', 'i-sm') ?><span><b><?= ui_unread() ?></b> ta ko'rilmagan LC-UP ogohlantirish</span></a><?php endif; ?>
+    <?php if (is_admin() && ui_shop_unread() > 0): ?><a class="side-alert" href="shop.php?status=unread"><?= icon('siren', 'i-sm') ?><span><b><?= ui_shop_unread() ?></b> ta ko'rilmagan Do'kon ogohlantirish</span></a><?php endif; ?>
     <nav class="nav" aria-label="Bo'limlar">
       <div class="eyebrow nav-label">Bo'limlar</div>
       <?php foreach ($items as [$key, $href, $short, $ic, $long]): ?>
-        <a href="<?= e($href) ?>" <?= ($key === $active || ($key === 'lcup' && $active === 'recon')) ? 'aria-current="page"' : '' ?>><?= icon($ic) ?> <?= e($long) ?><?= ($key === 'lcup' && ui_unread() > 0) ? '<span class="nav-badge" aria-label="Ko\'rilmagan ogohlantirishlar">' . ui_unread() . '</span>' : '' ?></a>
+        <a href="<?= e($href) ?>" <?= ($key === $active || ($key === 'lcup' && $active === 'recon') || ($key === 'shop' && $active === 'shopinv')) ? 'aria-current="page"' : '' ?>><?= icon($ic) ?> <?= e($long) ?><?= ($key === 'lcup' && ui_unread() > 0) ? '<span class="nav-badge" aria-label="Ko\'rilmagan ogohlantirishlar">' . ui_unread() . '</span>' : '' ?><?= ($key === 'shop' && ui_shop_unread() > 0) ? '<span class="nav-badge" aria-label="Ko\'rilmagan ogohlantirishlar">' . ui_shop_unread() . '</span>' : '' ?></a>
       <?php endforeach; ?>
     </nav>
     <div class="side-foot">
@@ -230,7 +254,7 @@ function ui_start(string $active, array $o = []): void {
     <header class="topbar no-print">
       <a class="brand-mark" href="index.php" aria-label="Bosh sahifa"><img src="assets/logo-64.png" alt="" width="30" height="30"></a>
       <?= ui_scope_switcher('pill') ?>
-      <?php if (is_admin()): ?><a class="btn btn-ghost btn-icon bell" href="lcup.php<?= ui_unread() > 0 ? '?status=unread' : '' ?>" aria-label="LC-UP ogohlantirishlari"><?= icon('bell') ?><?= ui_unread() > 0 ? '<span class="bell-badge">' . min(99, ui_unread()) . '</span>' : '' ?></a><?php endif; ?>
+      <?php if (is_admin()): ?><a class="btn btn-ghost btn-icon bell" href="<?= ui_unread() == 0 && ui_shop_unread() > 0 ? 'shop.php?status=unread' : 'lcup.php' . (ui_unread() > 0 ? '?status=unread' : '') ?>" aria-label="Ogohlantirishlar"><?= icon('bell') ?><?= (ui_unread() + ui_shop_unread()) > 0 ? '<span class="bell-badge">' . min(99, ui_unread() + ui_shop_unread()) . '</span>' : '' ?></a><?php endif; ?>
       <a class="btn btn-ghost btn-icon" href="process.php?action=logout" data-post aria-label="Chiqish"><?= icon('log-out') ?></a>
     </header>
     <main class="main" id="main">
@@ -246,7 +270,7 @@ function ui_end(array $o = []): void {
 </div>
 <nav class="bnav no-print" aria-label="Pastki navigatsiya">
   <?php foreach ($items as [$key, $href, $short, $ic, $long, $b, $also]): ?>
-    <a href="<?= e($href) ?>" <?= ($key === $active || in_array($active, $also, true)) ? 'aria-current="page"' : '' ?>><?= icon($ic) ?><span><?= e($short) ?></span><?= ($key === 'lcup' && ui_unread() > 0) ? '<i class="bn-dot">' . min(99, ui_unread()) . '</i>' : '' ?></a>
+    <a href="<?= e($href) ?>" <?= ($key === $active || in_array($active, $also, true)) ? 'aria-current="page"' : '' ?>><?= icon($ic) ?><span><?= e($short) ?></span><?= ($key === 'lcup' && ui_unread() > 0) ? '<i class="bn-dot">' . min(99, ui_unread()) . '</i>' : '' ?><?= ($key === 'shop' && ui_shop_unread() > 0) ? '<i class="bn-dot">' . min(99, ui_shop_unread()) . '</i>' : '' ?></a>
   <?php endforeach; ?>
 </nav>
 <?= $o['after'] ?? '' ?>

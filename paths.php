@@ -45,7 +45,7 @@ function path_inside_webroot(string $path): bool {
 function private_dir_safe(): bool { $d = private_dir(); return $d !== null && !path_inside_webroot($d); }
 
 /** Keys that Argent manages in config.php (written in this order). Everything else found in the file is preserved. */
-const CONFIG_KEYS = ['LCUP_BASE_URL', 'LCUP_PHONE', 'LCUP_PASSWORD', 'LCUP_PHONE_FORMAT', 'CRON_TOKEN', 'LCUP_WEBHOOK_SECRET', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE'];
+const CONFIG_KEYS = ['LCUP_BASE_URL', 'LCUP_PHONE', 'LCUP_PASSWORD', 'LCUP_PHONE_FORMAT', 'CRON_TOKEN', 'LCUP_WEBHOOK_SECRET', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE', 'SHOP_DB_PATH'];
 
 function private_config_file(): ?string { $d = private_dir(); return $d ? $d . '/config.php' : null; }
 /**

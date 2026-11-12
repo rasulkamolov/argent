@@ -17,9 +17,15 @@ if (!$cli) {
     if (!hash_equals($want, $got)) { http_response_code(403); echo "Forbidden\n"; exit; }
 }
 $r = lcup_run(['trigger' => $cli ? 'cron-cli' : 'cron-http']);
+// Do'konPro monitoring (read-only on the shop). Independent of LC-UP: its failure never hides the LC-UP result and vice versa.
+$shopLine = '';
+try { require_once __DIR__ . '/shop_report.php'; $sr = shop_run(['trigger' => $cli ? 'cron-cli' : 'cron-http']);
+    $shopLine = $sr['skipped'] ? ' shop=skipped(' . $sr['skipped'] . ')' : ($sr['busy'] ? ' shop=busy' : ' shop=' . ($sr['ok'] ? 'ok' : 'FAIL') . ' shop_new_events=' . $sr['new_events']);
+    if (!$sr['ok'] && !$cli) { $shopFail = $sr['errors']; } } catch (Throwable $e) { $shopLine = ' shop=FAIL'; $shopFail = ['Ichki xatolik: ' . get_class($e)]; error_log('shop run: ' . $e->getMessage()); }
 if (!empty($r['busy'])) { echo "BUSY\n"; exit(0); }
-$line = ($r['ok'] ? 'OK' : 'FAIL') . " requests={$r['requests']} new_events={$r['new_events']}" . ($r['errors'] ? ' errors=' . count($r['errors']) : '');
-if (!$r['ok'] && !$cli) { http_response_code(500); }
+$line = ($r['ok'] ? 'OK' : 'FAIL') . " requests={$r['requests']} new_events={$r['new_events']}" . ($r['errors'] ? ' errors=' . count($r['errors']) : '') . $shopLine;
+if ((!$r['ok'] || !empty($shopFail)) && !$cli) { http_response_code(500); }
 echo $line . "\n";
 if (!$r['ok']) foreach ($r['errors'] as $e) echo ' - ' . $e . "\n";
-exit($r['ok'] ? 0 : 1);
+foreach (($shopFail ?? []) as $e) echo ' - shop: ' . $e . "\n";
+exit($r['ok'] && empty($shopFail) ? 0 : 1);

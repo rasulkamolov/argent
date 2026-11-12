@@ -64,6 +64,43 @@ Summa moduli kamaysa 🔴 «Oylik to'lov kamaytirildi», oshsa 🟡; 24 soat ani
 **Darajalar**: 🔴 to'lov o'chirilishi, summa kamayishi/0 ga tushishi, qarzning to'lovsiz kamayishi, yangi/o'zgargan/o'chirilgan chegirma, oylik to'lov summasi o'zgarishi, 21:00 da Argent'ga kiritilmagan naqd, sinxronizatsiya to'xtashi, sozlamalar o'zgarishi.
 🟡 summa oshishi, sana/usul/guruh o'zgarishi, yaratilgandan 10 daqiqa ichidagi tuzatish, muzlatishda 0 dan farqli summa. Uzilishdan keyin 7 kunlik jurnal avtomatik to'ldiriladi va uzilish davri belgilanadi.
 
+## Do'konPro (do'kon) nazorati va Argent bilan solishtirish (administrator uchun)
+
+Do'konPro (`https://oxfordlc.uz/shop/`, SQLite `bookshop.db`) bazasini **faqat o'qish** rejimida ochadi (`SQLITE_OPEN_READONLY` + `PRAGMA query_only`; yozishga urinish rad etiladi — Admin → Do'kon da isbot ko'rinadi),
+do'kon fayllariga tegmaydi. Do'konda audit jurnali yo'q va qatorlar jismonan o'chiriladi, shuning uchun har daqiqada do'kon holati Argent ichidagi **snapshot** bilan solishtiriladi
+va farq `shop_events` ga (o'chirib/o'zgartirib bo'lmaydigan, faqat «ko'rildi» + izoh) yoziladi. Birinchi ishga tushishda mavjud ma'lumotlar «asos» sifatida saqlanadi (ogohlantirishsiz).
+
+**O'rnatish**
+1. Yangi fayllarni yuklang (`shop*.php`, `inventory_check.php`, `shop_*`, `admin_parts/shop.php`, yangilangan `db.php`, `cron.php`, `layout.php`, `process.php`, `admin.php`, `solishtirish.php`, `lcup_report.php`, `paths.php`, `.htaccess`, `assets/app.css`). `harvards_finance.sqlite` ni YUKLAMANG. Baza o'zi v9 ga o'tadi.
+2. Admin → **Do'kon** → «Bazaning to'liq yo'li»: odatda `/home/u180105715/domains/oxfordlc.uz/public_html/shop/db/bookshop.db` (do'konning `includes/config.php` dagi `DB_PATH`). Bo'sh qoldirsangiz `public_html/shop/db/bookshop.db` va boshqa odatiy joylar qidiriladi.
+   Sahifada: ulanish ✓, «faqat o'qish» ✓, jadvallar tuzilishi ✓ ko'rinishi kerak.
+3. «Filiallarni moslash»: **Asosiy filial ↔ Yangibozor Markaz**, **Oxford Bozqala ↔ OXFORD Bo'zqal'a** (oldindan to'ldirilgan; nom bo'yicha topiladi).
+4. «Hozir tekshirish» → xatosiz tugashi kerak. **Cron o'zgarmaydi**: `cron.php` LC-UP dan keyin do'konni ham tekshiradi (javobda `shop=ok shop_new_events=N`). Telegram token/chat va 21:00 / dushanba vaqti LC-UP bilan umumiy.
+5. Do'kon bo'limlari: **Do'kon nazorat** (hodisalar), **Solishtirish → Do'kon** (kunlik/oylik), **Inventarizatsiya**, **Haftalik hisobot**. Hammasi faqat administratorga.
+
+**bookshop.db internetdan yuklanadimi?** Tekshirildi (faqat `HEAD`, fayl yuklab olinmadi): `/shop/db/bookshop.db` → 403, `/shop/db/` → 403, `/shop/db/bookshop.db-wal` → 403, `/shop/includes/config.php` → 403, `/shop/bookshop.db` → 404 — **hozir himoyalangan**.
+Lekin himoya faqat server qoidasiga tayanadi. Yanada xavfsiz: bazani `public_html` dan tashqariga (`…/domains/oxfordlc.uz/shop_private/bookshop.db`) ko'chiring, do'konning `DB_PATH` ini yangilang va Admin → Do'kon dagi yo'lni o'zgartiring (Argent faylni HTTP orqali emas, fayl tizimi orqali o'qiydi). Tekshirish tugmasi: «Internetdan ochilishini tekshirish».
+
+**Kunlik solishtirish** (filial × kategoriya: Kitob / qolgan do'kon; kun 00:00 da almashadi)
+- Do'konPro tomoni: kassaga tushgan pul = chekning to'langan qismi (`initial_paid`; qarz cheklarida boshlang'ich to'lov naqd deb olinadi) + **naqd qarz to'lovlari** − **naqd qaytarilgan pul**. Aralash savatdagi pul kategoriyalarga tovar qiymati ulushi bo'yicha bo'linadi. To'lanmagan (qarz) qism kutilmaydi.
+- Naqd ↔ Argent **Naqd**; Do'kon **Karta + O'tkazma** ↔ Argent **Click + Bank (birga)**.
+- Argent tomoni: kategoriyasi `shop` / `kitob` bo'lgan kirimlar, **yoki** kategoriyasi «To'lov», LC-UP talaba havolasi yo'q va izohida shop/do'kon/kitob/book bor kirimlar (kichik-katta harf farqsiz) — bular 🟡 «Noto'g'ri kategoriya» deb belgilanadi. Kategoriya nomlari va kalit so'zlar sozlanadi.
+- Holatlar: ✅ mos · 🔴 do'konda ko'p (Argentga to'liq kiritilmagan) · 🔴 savdo bor, Argentda yozuv yo'q · 🔴 «Kitob sotuvi Do'konPro'da yo'q» (Argentda kitob kirimi bor, filialda Kitob tovari yo'q) · 🟠 Argentda ko'p (sotuv do'konga kiritilmagan) · 🟡 to'lov usuli farqi · 🟡 keyingi kunda kiritilgan (**1+ kun**, necha kun kechikkani ko'rsatiladi) · 🟡 noto'g'ri kategoriya.
+- 21:00 xulosaga qo'shiladi; 🔴 holatlar bugun uchun kun yakuni vaqtida (21:00), kechagi kun uchun ertalab (10:00) hodisa + Telegram bo'ladi (xodimlar ertasiga kiritishi mumkin).
+
+**O'zgarishlar monitoringi (har daqiqa)**
+🔴 darhol Telegram: o'chirilgan chek (va chek raqamidagi bo'shliq); yaratilgach tovarlar/summa/to'lov turi/sotuvchi/vaqt o'zgargan chek; **har qanday qaytarish** (sotuvdan >30 daq. keyin, boshqa kishi qaytargan, naqd pul qaytarilgan — belgilar bilan); qarz: mijozsiz, telefonsiz, yangi mijoz, xodimga; qarz to'lovsiz kamaygan yoki yopilgan; o'chirilgan/o'zgargan qarz to'lovi;
+qo'lda «Tuzatish», minusli «Inventarizatsiya», «Hisobdan chiqarish» (tovar, soni, tannarx va sotuv qiymati, xodim, izoh — izohsiz holat alohida belgilanadi); ombor qoldig'i harakatsiz o'zgargan; sotuv narxi tushirilgan / tushirilib 24 soatda qaytarilgan / tovar odatdagi narxdan past sotilgan; kirim tahrirlangan/o'chirilgan/bekor qilingan; kirim narxi oldingi kirimlardan >30% baland;
+«chiqdi» ga 24 soatda boshqa filialda «kirdi» topilmasa; do'kon xarajati; **Administrator logini bilan har bir sotuv**; bloklangan xodim sotuvi (faqat Argent blokni aniqlagandan keyingilari); ish vaqtidan (08:00–21:00) tashqari sotuv; inventarizatsiya tekshiruvidagi kamomad.
+🟡 hisobotda: ombor 0/minus bo'lib sotilgan, narx oshgan, kichik qarz, mijoz/izoh tahrirlari, plus inventarizatsiya, yangi/blokdan chiqqan xodim. Barcha chegaralar Admin → Do'kon da.
+
+**Inventarizatsiya tekshiruvi** (faqat administrator): har filialdan 5–10 tovar (barcha Kitob tovarlari va eng ko'p sotiladigan 3 tasi doim, qolgani tasodifiy); **ko'r sanash** — tizimdagi qoldiq sahifada ham, HTML manbada ham sanalgunga qadar yo'q; sonni kiritib saqlagach shu paytdagi qoldiq bilan solishtiriladi: kamomad dona, tannarx va sotuv narxi bo'yicha; tarix saqlanadi; kamomad 🔴 hodisa bo'ladi.
+**Haftalik hisobot** (dushanba, LC-UP hisobotiga qo'shiladi va «Haftalik hisobot» sahifasida): filial va xodim bo'yicha kamomad (hisobdan chiqarish, minus tuzatish, harakatsiz o'zgarish, qaytarish, o'chirilgan cheklar) va sotuvchilar: cheklar soni, o'rtacha chek, naqd ulushi, qaytarish, o'chirish, qarz, tuzatish, smena kunlarida filial savdosi o'rtachaga nisbatan; boshqalardan sezilarli farq qilganlar 🔺.
+
+**Ma'lum cheklar** (do'kon bazasida yo'q narsalar): kim o'chirgani/narxni o'zgartirgani saqlanmaydi (sotuvchi ko'rsatiladi); «Tuzatish / Hisobdan chiqarish / Inventarizatsiya / Ko'chirish» harakat turlarining bazadagi nomi hozircha ma'lum emas (hozirgi ma'lumotda faqat sale/purchase/purchase_cancel/initial) — nomi bo'yicha taniladi, tanilmagan tur 🔴 «Noma'lum ombor harakati» sifatida turi bilan ko'rsatiladi.
+Bitta chekda aralash to'lov turi yo'q (`payment_type` bitta qiymat: cash/card/debt), shuning uchun alohida ishlov kerak emas; qarz cheklarida boshlang'ich to'lov (`initial_paid`) naqd deb olinadi.
+**Testlar** (haqiqiy ma'lumotsiz — sintetik «Test …» ma'lumotlari): `tests/run_shop_tests.sh` (mantiq 115 ta + veb-interfeys 64 ta tekshiruv). Haqiqiy `bookshop.db` repoga, kodga yoki testlarga kiritilmagan.
+
 ## Zaxira
 - Admin kirganda har kuni **avtomatik** zaxira nusxa olinadi (`data/backups/`, oxirgi 30 ta).
 - Har bir filial kartasida ⬇ tugmasi: faqat shu filial ma'lumotini alohida `.sqlite` fayl qilib yuklab oladi.
@@ -72,4 +109,5 @@ Summa moduli kamaysa 🔴 «Oylik to'lov kamaytirildi», oshsa 🟡; 24 soat ani
 - `index.php` kunlik hisob · `filiallar.php` filiallar taqqoslash · `hisobot.php`, `analitika.php`, `kassa.php` hisobotlar
 - `admin.php` + `admin_parts/` boshqaruv · `import.php` + `import_lib.php` SQL import · `backup.php` zaxira
 - `proofs.php`, `proof.php` isbot fayllari · `db.php` (baza va migratsiya) · `auth.php` (rollar, filial doirasi, CSRF) · `process.php` (barcha amallar)
+- Do'kon moduli: `shop_db.php` (faqat-o'qish adapteri — do'kon jadvallarini bilgan yagona fayl), `shop_lib.php`, `shop_sync.php`, `shop_recon.php`, `shop_report.php`, `shop_inv.php`; sahifalar `shop.php`, `shop_view_recon.php`, `inventory_check.php`; `tools/shop_schema_dump.php` — do'kon bazasi tuzilishini (ma'lumotsiz) chiqaradi; `tests/` — sinovlar
 - `tools/import_cli.php` — buyruq satridan import: `php tools/import_cli.php dump.sql "Filial" --create-branch`

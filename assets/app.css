@@ -763,3 +763,8 @@ a.bcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border
 @media (max-width: 640px) { .subnav a { white-space: nowrap; } }
 
 .lc-ev.is-yellow { box-shadow: inset 3px 0 0 #eda100; }
+
+/* Do'kon section: 4-item sub navigation scrolls sideways on narrow screens instead of being cut off */
+.subnav { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.subnav::-webkit-scrollbar { display: none; }
+.subnav a { flex: 0 0 auto; }
