@@ -3,14 +3,13 @@
  * Read-only HTTP client for LC-UP (Laravel + Livewire v2).
  *
  * Hard rules enforced HERE (not by convention):
- *   - every request is a GET, except
- *       purpose "login"          : the Livewire call of the login component, built from a fixed template
- *       purpose "switch_branch"  : ONLY when the admin ticked "allow_switch_post"; one Livewire call that selects the branch
+ *   - every request is a GET, except the Livewire calls listed in lcup_policy.php (login / filial / view) — nothing else can be sent
  *   - only the configured LC-UP host is ever contacted
  *   - credentials come from argent_private/config.php and are never logged or shown
  */
 require_once __DIR__ . '/lcup_lib.php';
 require_once __DIR__ . '/lcup_parse.php';
+require_once __DIR__ . '/lcup_policy.php';
 
 class LcupError extends RuntimeException {
     public $kind;
@@ -57,16 +56,15 @@ class LcupClient {
     private function request(string $method, string $url, array $o = []): array {
         $method = strtoupper($method); $purpose = $o['purpose'] ?? '';
         if ($method !== 'GET') {
-            $okPost = $method === 'POST' && (
-                ($purpose === 'login' && preg_match('~/livewire/message/[\w.\-]*login[\w.\-]*$~i', $url)) ||
-                ($purpose === 'switch_branch' && lcup_setting('allow_switch_post') === '1' && preg_match('~/livewire/message/[\w.\-]+$~', $url)));
-            if (!$okPost) throw new LcupError("Faqat-o'qish qoidasi: bu so'rov ($method) taqiqlangan.", 'config');
+            $okPost = $method === 'POST' && isset(LCUP_LW_ALLOWED[$purpose]) && preg_match('~/livewire/message/[\w.\-]+$~', $url)
+                && ($purpose === 'login' ? (bool)preg_match('~/livewire/message/[\w.\-]*login[\w.\-]*$~i', $url) : lcup_setting('allow_switch_post') === '1');
+            if (!$okPost) { lcup_reqlog('REFUSED', (string)parse_url($url, PHP_URL_PATH), $purpose ?: $method, $method . ' ruxsat etilmagan', 0, 0); throw new LcupError("Faqat-o'qish qoidasi: bu so'rov ($method) taqiqlangan.", 'config'); }
         }
         $host = parse_url($url, PHP_URL_HOST);
         if (strcasecmp((string)$host, (string)$this->host) !== 0) throw new LcupError("Boshqa domenga so'rov yuborish taqiqlangan.", 'config');
         $gap = $this->delayMs / 1000 - (microtime(true) - $this->last);
         if ($gap > 0) usleep((int)($gap * 1e6));
-        $ch = curl_init($url);
+        $t0 = microtime(true); $ch = curl_init($url);
         $hdr = ['Accept: ' . ($o['accept'] ?? 'text/html,application/xhtml+xml'), 'Accept-Language: uz,en;q=0.8'];
         foreach (($o['headers'] ?? []) as $h) $hdr[] = $h;
         curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => $method === 'GET', CURLOPT_MAXREDIRS => 5, CURLOPT_CONNECTTIMEOUT => 10, CURLOPT_TIMEOUT => 25,
@@ -76,6 +74,7 @@ class LcupClient {
         $body = curl_exec($ch); $err = curl_error($ch); $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE); $eff = (string)curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
         curl_close($ch);
         $this->last = microtime(true); $this->requests++;
+        lcup_reqlog($method, (string)parse_url($url, PHP_URL_PATH) . (parse_url($url, PHP_URL_QUERY) ? '?' . parse_url($url, PHP_URL_QUERY) : ''), $purpose !== '' ? $purpose : 'get', (string)($o['detail'] ?? ''), $code, (int)round((microtime(true) - $t0) * 1000));
         $this->trace[] = [$method, parse_url($url, PHP_URL_PATH) . (parse_url($url, PHP_URL_QUERY) ? '?' . parse_url($url, PHP_URL_QUERY) : ''), $code];
         if ($body === false) throw new LcupError(lcup_redact("LC-UP ga ulanib bo'lmadi: $err"), 'network');
         if (strcasecmp((string)parse_url($eff, PHP_URL_HOST), (string)$this->host) !== 0) throw new LcupError("So'rov boshqa domenga yo'naltirildi.", 'network');
@@ -103,10 +102,11 @@ class LcupClient {
     }
 
     /* ---------------------------------------------------------------- Livewire v2 */
-    private function lw(string $purpose, array &$comp, array $updates, string $referer): array {
+    private function lw(string $purpose, array &$comp, array $updates, string $referer, bool $cascade = false): array {
+        lcup_policy_check($purpose, $updates, $cascade);                               // the whitelist: nothing else gets past this line
         $name = $comp['fingerprint']['name'] ?? '';
         $payload = json_encode(['fingerprint' => $comp['fingerprint'], 'serverMemo' => $comp['memo'], 'updates' => $updates], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $r = $this->request('POST', $this->base . '/livewire/message/' . $name, ['purpose' => $purpose, 'body' => $payload, 'accept' => 'text/html, application/xhtml+xml',
+        $r = $this->request('POST', $this->base . '/livewire/message/' . $name, ['purpose' => $purpose, 'detail' => lcup_updates_summary($updates), 'body' => $payload, 'accept' => 'text/html, application/xhtml+xml',
             'headers' => ['Content-Type: application/json', 'X-Livewire: true', 'X-CSRF-TOKEN: ' . $this->csrf, 'X-Requested-With: XMLHttpRequest', 'Origin: ' . $this->base, 'Referer: ' . $referer]]);
         $j = json_decode($r['body'], true);
         if ($this->capture !== null) $this->capture[] = ['purpose' => $purpose, 'component' => $name, 'status' => $r['status'], 'update_types' => array_map(function ($u) { return $u['type'] . ':' . ($u['payload']['name'] ?? $u['payload']['method'] ?? $u['payload']['event'] ?? ''); }, $updates),
@@ -116,7 +116,7 @@ class LcupClient {
         foreach (($j['serverMemo'] ?? []) as $k => $v) { if ($k === 'data' && is_array($v) && isset($comp['memo']['data'])) $comp['memo']['data'] = array_replace($comp['memo']['data'], $v); else $comp['memo'][$k] = $v; }
         return $j;
     }
-    private static function lw_id(): string { return substr(bin2hex(random_bytes(4)), 0, 4); }
+    public static function lw_id(): string { return substr(bin2hex(random_bytes(4)), 0, 4); }
     private static function lw_sync(string $name, $value): array { return ['type' => 'syncInput', 'payload' => ['id' => self::lw_id(), 'name' => $name, 'value' => $value]]; }
     private static function lw_call(string $method, array $params = []): array { return ['type' => 'callMethod', 'payload' => ['id' => self::lw_id(), 'method' => $method, 'params' => $params]]; }
     private static function lw_event(string $event, array $params): array { return ['type' => 'fireEvent', 'payload' => ['id' => self::lw_id(), 'event' => $event, 'params' => $params]]; }
@@ -159,6 +159,47 @@ class LcupClient {
         $this->csrf = lcup_csrf_from($r['body']) ?: $this->csrf;
     }
 
+    /* ---------------------------------------------------------------- read-only Livewire "view" session (whitelisted calls only) */
+    /** GET a page and index its Livewire components by id. */
+    public function view_page(string $pathOrUrl): array {
+        $r = $this->page($pathOrUrl); $this->csrf = lcup_csrf_from($r['body']) ?: $this->csrf;
+        $comps = []; foreach (lcup_lw_components($r['body']) as $c) $comps[$c['id']] = $c;
+        return ['url' => $r['url'], 'html' => $r['body'], 'comps' => $comps];
+    }
+    /** Runs whitelisted updates on component $id, then delivers the events the server emitted to the listening components. Returns every HTML fragment received. */
+    public function view_run(array &$page, string $id, array $updates): array {
+        if (!isset($page['comps'][$id])) throw new LcupError("Livewire komponenti topilmadi (sahifa tuzilishi o'zgargan bo'lishi mumkin).", 'layout');
+        $frags = []; $queue = [[$id, $updates, false]]; $guard = 0;
+        while ($queue && $guard++ < 12) {
+            [$cid, $ups, $casc] = array_shift($queue);
+            $j = $this->lw('view', $page['comps'][$cid], $ups, $page['url'], $casc);
+            $html = (string)($j['effects']['html'] ?? '');
+            if ($html !== '') { $frags[] = $html; foreach (lcup_lw_components('<div>' . $html . '</div>') as $nc) if (!isset($page['comps'][$nc['id']])) $page['comps'][$nc['id']] = $nc; }
+            foreach ((array)($j['effects']['emits'] ?? []) as $em) {
+                $ev = (string)($em['event'] ?? ''); if ($ev === '' || !empty($em['ancestorsOnly'])) continue;
+                foreach ($page['comps'] as $oid => $oc) {
+                    if (!empty($em['selfOnly']) && $oid !== $cid) continue;
+                    if (!empty($em['to']) && ($oc['fingerprint']['name'] ?? '') !== $em['to']) continue;
+                    if (!in_array($ev, (array)($oc['effects']['listeners'] ?? []), true)) continue;
+                    $queue[] = [$oid, [self::lw_event($ev, array_values((array)($em['params'] ?? [])))], true];
+                }
+            }
+        }
+        return $frags;
+    }
+    /** Livewire.emit(event, params) as the browser does it: one fireEvent to every component listening for it. Only whitelisted events pass. */
+    public function view_emit(array &$page, string $event, array $params): array {
+        $frags = [];
+        foreach ($page['comps'] as $oid => $oc) {
+            if (!in_array($event, (array)($oc['effects']['listeners'] ?? []), true)) continue;
+            $j = $this->lw('view', $page['comps'][$oid], [self::lw_event($event, $params)], $page['url']);
+            if (!empty($j['effects']['html'])) $frags[] = (string)$j['effects']['html'];
+        }
+        return $frags;
+    }
+    public static function call(string $method, array $params = []): array { return self::lw_call($method, $params); }
+    public function adopt_csrf(string $html): void { $this->csrf = lcup_csrf_from($html) ?: $this->csrf; }
+
     /* ---------------------------------------------------------------- branches */
     public $resolved_key = null;
     /**
@@ -191,13 +232,13 @@ class LcupClient {
             $this->csrf = lcup_csrf_from($html) ?: $this->csrf; $ref = $this->url($probePath);
             if ($key === '') {                                  // the other branches are only listed after the dropdown gets focus
                 $fm = $sel['focus_method'] ?? ''; if ($fm === '' || !preg_match('/filial|branch/i', $fm)) throw new LcupError("Filial ro'yxatini yuklash usuli topilmadi. Mapping'da filial ID sini qo'lda kiriting.", 'branch');
-                $j = $this->lw('switch_branch', $comp, [self::lw_call($fm)], $ref);
+                $j = $this->lw('filial', $comp, [self::lw_call($fm)], $ref);
                 $opt = lcup_find_branch_select('<html><body>' . ($j['effects']['html'] ?? '') . '</body></html>', [], [$name]);
                 foreach (($opt['options'] ?? []) as $o) if ($o['value'] !== '' && lc_norm($o['label']) === lc_norm($name)) $key = (string)$o['value'];
                 if ($key === '') throw new LcupError("«$name» filiali LC-UP ro'yxatida topilmadi. Mavjud: " . implode(', ', array_map(function ($o) { return $o['label'] . '=' . $o['value']; }, $opt['options'] ?? [])), 'branch');
                 $this->resolved_key = $key;
             }
-            $this->lw('switch_branch', $comp, [self::lw_sync($sel['prop'], $key), self::lw_call($sel['method'])], $ref);
+            $this->lw('filial', $comp, [self::lw_sync($sel['prop'], $key), self::lw_call($sel['method'])], $ref);
         }
         $r = $this->page($probePath);
         if (!$isTarget($r['body']) && !(function () use ($r, $key, $name) { $s = lcup_find_branch_select($r['body'], [$key], [$name]); return $s && $key !== '' && ($s['current'] ?? null) === $key; })())

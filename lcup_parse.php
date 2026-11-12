@@ -175,6 +175,8 @@ function lcup_classify_event(string $text): array {
 }
 
 /* ------------------------------------------------------------------ worker_reports ("Xodimlar faoliyati") */
+/** wire:id of $n or of its nearest ancestor that has one. */
+function lc_wire_id(?DOMNode $n): ?string { for (; $n; $n = $n->parentNode) if ($n instanceof DOMElement && $n->hasAttribute('wire:id')) return $n->getAttribute('wire:id'); return null; }
 function lc_cx(string $c): string { return 'contains(concat(" ",normalize-space(@class)," ")," ' . $c . ' ")'; }
 /**
  * Real layout (checked against a saved page): a staff panel on the left (.xf-s-item, the selected one has .xf-on) and,
@@ -183,8 +185,9 @@ function lc_cx(string $c): string { return 'contains(concat(" ",normalize-space(
  */
 function lcup_parse_worker_reports(string $html, string $today): array {
     $d = lc_dom($html); $xp = new DOMXPath($d);
-    $res = ['structure' => false, 'strategy' => 'none', 'staff' => null, 'staff_list' => [], 'rows' => [], 'day_totals' => []];
+    $res = ['structure' => false, 'strategy' => 'none', 'staff' => null, 'staff_list' => [], 'rows' => [], 'day_totals' => [], 'staff_comp' => null, 'log_comp' => null, 'more_comp' => null, 'more_left' => 0];
     foreach ($xp->query('//*[' . lc_cx('xf-s-item') . ']') as $b) {
+        if ($res['staff_comp'] === null) $res['staff_comp'] = lc_wire_id($b);
         $oc = lc_attr($b, 'wire:click'); $id = preg_match('/openHistory\(\s*[\'"]?(\d+)/', $oc, $m) ? $m[1] : null;
         $nm = $xp->query('.//*[' . lc_cx('xf-s-name') . ']', $b)->item(0); $cn = $xp->query('.//*[' . lc_cx('xf-s-cnt') . ']', $b)->item(0);
         $sel = strpos(' ' . lc_attr($b, 'class') . ' ', ' xf-on ') !== false;
@@ -193,6 +196,8 @@ function lcup_parse_worker_reports(string $html, string $today): array {
     }
     if ($res['staff'] === null && ($h = $xp->query('//*[' . lc_cx('xf-who') . ']//h1')->item(0))) $res['staff'] = lc_text($h);
     $chrome = $xp->query('//*[' . lc_cx('xf-wrap') . ' or ' . lc_cx('xf-log') . ']')->length > 0;
+    if (($lg = $xp->query('//*[' . lc_cx('xf-log') . ']')->item(0))) $res['log_comp'] = lc_wire_id($lg);
+    if (($mb = $xp->query('//*[' . lc_cx('xf-more') . ']')->item(0))) { $res['more_comp'] = lc_wire_id($mb); $res['more_left'] = (int)preg_replace('/\D+/', '', lc_text($mb)); }
     foreach ($xp->query('//*[' . lc_cx('xf-day') . ']') as $day) {
         $date = preg_match('/xf-day-(\d{4}-\d{2}-\d{2})/', lc_attr($day, 'wire:key'), $m) ? $m[1] : $today;
         if (($dc = $xp->query('.//*[' . lc_cx('xf-dc') . ']', $day)->item(0))) $res['day_totals'][$date] = (int)preg_replace('/\D+/', '', lc_text($dc));
@@ -244,6 +249,12 @@ function lcup_parse_payment_rows(DOMDocument $d, array $required): array {
 }
 /** Live payment list (/admin/tolovlars). Same table family as the archive, without the deleted columns. */
 function lcup_parse_payments(string $html): array { return lcup_parse_payment_rows(lc_dom($html), ['amount', 'student']); }
+/** The student's own "To'lovlar" tab: no student column, so only the amount column is required (plus at least 3 recognised columns). */
+function lcup_parse_student_payments(string $html): array {
+    $r = lcup_parse_payment_rows(lc_dom($html), ['amount']);
+    if ($r['structure'] && count($r['headers']) < 3) $r['structure'] = false;
+    return $r;
+}
 /** Archive of deleted payments: row actions carry the payment id (deleteTrashed(10564667)). */
 function lcup_parse_archive(string $html): array { return lcup_parse_payment_rows(lc_dom($html), ['amount', 'deleted']); }
 
@@ -283,7 +294,7 @@ function lcup_parse_debtors(string $html): array {
     foreach ($t['rows'] as $r) {
         [$sid, $sname] = lc_student_link($r['tr']); $name = $sname ?: lc_cell($r, $map, 'student'); $debt = lc_money(lc_cell($r, $map, 'debt'));
         if (($name === '' && !$sid) || $debt === null) continue;
-        $res['rows'][] = ['key' => $sid ?: 'n:' . lc_norm($name), 'student_id' => $sid, 'student_name' => $name, 'debt' => abs($debt)];
+        $res['rows'][] = ['key' => $sid ?: 'n:' . lc_norm($name), 'student_id' => $sid, 'student_name' => $name, 'group' => lc_cell($r, $map, 'group'), 'debt' => abs($debt)];
     }
     return $res;
 }

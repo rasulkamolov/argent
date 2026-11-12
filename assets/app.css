@@ -761,3 +761,5 @@ a.bcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border
 .lc-ev .lc-br { display: inline-flex; align-items: center; gap: 6px; min-width: 120px; }
 .side-alert > span { line-height: 1.35; }
 @media (max-width: 640px) { .subnav a { white-space: nowrap; } }
+
+.lc-ev.is-yellow { box-shadow: inset 3px 0 0 #eda100; }

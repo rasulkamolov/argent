@@ -34,6 +34,17 @@ function lcup_selftest(): array {
                 $w = lcup_parse_worker_reports($html, date('Y-m-d'));
                 $add($w['structure'], "  Xodimlar faoliyati: " . ($w['structure'] ? count($w['rows']) . " ta amal, ochiq xodim «" . ($w['staff'] ?? '?') . "», xodimlar: " . count($w['staff_list']) : "TUZILMA TANILMADI"));
                 $sg = []; foreach ($w['staff_list'] as $s) if (empty($s['selected'])) $sg[] = $s['name'] . ' (' . $s['count'] . ')'; if ($sg) $add(null, "  Faqat hisoblagich ko'rinadigan xodimlar: " . implode(', ', $sg) . " — ularning amallari tafsiloti uchun LC-UP Livewire so'rovi kerak");
+                if (lcup_setting('allow_switch_post') === '1') {
+                    $others = array_values(array_filter($w['staff_list'], function ($x) { return empty($x['selected']) && $x['id'] !== null; }));
+                    if ($others && $w['staff_comp']) {
+                        try { $pg = ['url' => $c->url(lcup_setting('worker_url')), 'html' => $html, 'comps' => []]; foreach (lcup_lw_components($html) as $x) $pg['comps'][$x['id']] = $x; $c->adopt_csrf($html);
+                            $fr = $c->view_run($pg, $w['staff_comp'], [LcupClient::call('openHistory', [(string)$others[0]['id']])]); $pp = lcup_parse_worker_reports(implode("\n", $fr), date('Y-m-d'));
+                            $add($pp['rows'] ? true : false, "  Xodim tanlash (Livewire openHistory): «" . $others[0]['name'] . "» → " . count($pp['rows']) . " ta amal" . ($pp['staff'] ? ", sarlavha «" . $pp['staff'] . "»" : ", sarlavha topilmadi")); }
+                        catch (LcupError $e) { $add(false, "  Xodim tanlash: " . $e->getMessage()); }
+                    }
+                    $sid = null; foreach ($w['rows'] as $r) if ($r['student_id']) { $sid = $r['student_id']; break; }
+                    if ($sid) { try { $rows = lcup_student_charges($c, $sid); $add(true, "  O'quvchi «To'lovlar» tabi (Livewire): #$sid — " . count($rows) . " ta manfiy/oylik yozuv"); } catch (LcupError $e) { $add(false, "  O'quvchi tabi: " . $e->getMessage()); } }
+                } else $add(null, "  Livewire o'qish amallari o'chiq: faqat bitta xodim va filial o'qiladi");
                 $dummy = ['warnings' => []];
                 foreach ([['archive', lcup_setting('archive_url'), "O'chirilgan to'lovlar"], ['payments', lcup_setting('payments_url'), "To'lovlar ro'yxati (" . lcup_setting('payments_url') . ")"]] as [$kind, $url, $label]) {
                     try { $a = lcup_fetch_page($c, (int)$m['branch_id'], $url, 1, $kind, $dummy); $ids = count(array_filter(array_column($a['rows'], 'pay_id')));
@@ -82,6 +93,16 @@ function lcup_diagnostics(): array {
                 if ($url === '' || $url === '?page=2') continue;
                 try {
                     $r = $c->page($url); $save("{$tag}_{$key}.html", lcup_diag_clean($r['body']));
+                    if ($key === 'worker' && lcup_setting('allow_switch_post') === '1') {
+                        $p0 = lcup_parse_worker_reports($r['body'], date('Y-m-d')); $pg = ['url' => $r['url'], 'html' => $r['body'], 'comps' => []]; foreach (lcup_lw_components($r['body']) as $x) $pg['comps'][$x['id']] = $x; $c->adopt_csrf($r['body']);
+                        $save("{$tag}_components.json", json_encode(array_map(function ($x) { return ['id' => $x['id'], 'name' => $x['name'], 'listeners' => $x['effects']['listeners'] ?? [], 'data_keys' => array_keys($x['memo']['data'] ?? [])]; }, array_values($pg['comps'])), JSON_PRETTY_PRINT));
+                        foreach ($p0['staff_list'] as $s0) { if (!empty($s0['selected']) || $s0['id'] === null || !$p0['staff_comp']) continue;
+                            try { $fr = $c->view_run($pg, $p0['staff_comp'], [LcupClient::call('openHistory', [(string)$s0['id']])]); $save("{$tag}_staff_{$s0['id']}.html", lcup_diag_clean(implode("\n<!-- fragment -->\n", $fr))); $pp = lcup_parse_worker_reports(implode("\n", $fr), date('Y-m-d')); $lines[] = "  openHistory({$s0['id']}): fragments=" . count($fr) . " rows=" . count($pp['rows']) . " header=" . ($pp['staff'] ?? '?') . " more=" . ($pp['more_left'] ?? 0); }
+                            catch (LcupError $e) { $lines[] = "  openHistory({$s0['id']}): " . $e->getMessage(); } break; }
+                        $sid0 = null; foreach ($p0['rows'] as $rr) if ($rr['student_id']) { $sid0 = $rr['student_id']; break; }
+                        if ($sid0) { try { $sp = $c->view_page('/admin/students/' . $sid0); $fr = $c->view_emit($sp, 'studentTolovlarOchilsin', [(string)$sid0]); $save("{$tag}_student_{$sid0}_page.html", lcup_diag_clean($sp['html'])); $save("{$tag}_student_{$sid0}_payments_tab.html", lcup_diag_clean(implode("\n<!-- fragment -->\n", $fr))); $sx = lcup_parse_student_payments(implode("\n", $fr)); $lines[] = "  student tab #$sid0: fragments=" . count($fr) . " structure=" . ($sx['structure'] ? 'ha' : "YO'Q") . " rows=" . count($sx['rows']) . " headers=" . implode('/', $sx['headers']); }
+                            catch (LcupError $e) { $lines[] = "  student tab #$sid0: " . $e->getMessage(); } }
+                    }
                     if ($key === 'worker') {
                         $links = lcup_nav_links($r['body']); $save("{$tag}_links.txt", implode("\n", array_map(function ($l) { return $l[0] . ' -> ' . $l[1]; }, $links)));
                         $p = lcup_parse_worker_reports($r['body'], date('Y-m-d')); $lines[] = "  worker_reports: strategy={$p['strategy']} rows=" . count($p['rows']) . " staff=" . ($p['staff'] ?? '?');
@@ -96,6 +117,8 @@ function lcup_diagnostics(): array {
             }
         }
     } catch (LcupError $e) { $lines[] = "XATO: " . $e->getMessage(); }
+    $save('exchanges.json', lcup_diag_clean(json_encode(isset($c) ? $c->capture : [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)));
+    $rl = db()->query("SELECT at, method, purpose, path, detail, status FROM lcup_reqlog ORDER BY id DESC LIMIT 80")->fetchAll(); $save('request_log.txt', lcup_redact(implode("\n", array_map(function ($q) { return implode(' ', $q); }, array_reverse($rl)))));
     $info .= "So'rovlar (usul yo'l holat):\n"; foreach (($c->trace ?? []) as $t) $info .= "  {$t[0]} {$t[1]} {$t[2]}\n";
     $save('00_info.txt', $info . "\n" . implode("\n", $lines) . "\n");
     $zip = null;

@@ -23,8 +23,9 @@ function private_candidates(): array {
     return array_values(array_unique($c));
 }
 /** Existing private folder: the one that has config.php, else the first one that exists, else null. */
-function private_dir(): ?string {
+function private_dir(bool $reset = false): ?string {
     static $d = false;
+    if ($reset) $d = false;
     if ($d !== false) return $d;
     $d = null;
     foreach (private_candidates() as $c) if (is_file($c . '/config.php')) { $d = $c; return $d; }
@@ -43,19 +44,75 @@ function path_inside_webroot(string $path): bool {
 }
 function private_dir_safe(): bool { $d = private_dir(); return $d !== null && !path_inside_webroot($d); }
 
-/** Values from argent_private/config.php (`return [...]`). Never printed anywhere. */
-function private_config(): array {
-    static $cfg = null;
-    if ($cfg !== null) return $cfg;
-    $cfg = [];
-    $d = private_dir();
-    if ($d && is_file($d . '/config.php')) {
-        try { $r = (static function ($f) { return include $f; })($d . '/config.php'); if (is_array($r)) $cfg = $r; }
-        catch (Throwable $e) { error_log('argent config.php: ' . get_class($e)); }
+/** Keys that Argent manages in config.php (written in this order). Everything else found in the file is preserved. */
+const CONFIG_KEYS = ['LCUP_BASE_URL', 'LCUP_PHONE', 'LCUP_PASSWORD', 'LCUP_PHONE_FORMAT', 'CRON_TOKEN', 'LCUP_WEBHOOK_SECRET', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_API_BASE'];
+
+function private_config_file(): ?string { $d = private_dir(); return $d ? $d . '/config.php' : null; }
+/**
+ * Reads config.php, tolerant on purpose: `return [...]` (canonical, what the admin panel writes), but also plain `define('KEY','v')`
+ * lines and loose `'KEY' => 'v'` text. Values are trimmed (a trailing space/newline in a pasted token used to break comparisons).
+ * @return array [values, info]  info = file, exists, mode (array|regex|none), keys, mtime, error
+ */
+function private_config_read(): array {
+    $f = private_config_file(); $info = ['file' => $f, 'exists' => false, 'mode' => 'none', 'keys' => [], 'mtime' => null, 'error' => null];
+    if (!$f || !is_file($f)) return [[], $info];
+    $info['exists'] = true; $info['mtime'] = @filemtime($f);
+    if (!is_readable($f)) { $info['error'] = "config.php o'qib bo'lmaydi (huquqlarni tekshiring)"; return [[], $info]; }
+    $txt = (string)@file_get_contents($f); $vals = [];
+    if (function_exists('opcache_invalidate')) @opcache_invalidate($f, true);
+    clearstatcache(true, $f);
+    if (preg_match('/\breturn\s*(\[|array\s*\()/', $txt)) {         // only the canonical `return [...]` is executed; other styles are parsed as text
+        try { ob_start(); $r = (static function ($file) { return include $file; })($f); ob_end_clean(); if (is_array($r)) { $vals = $r; $info['mode'] = 'array'; } }
+        catch (Throwable $e) { if (ob_get_level()) ob_end_clean(); $info['error'] = 'config.php sintaksis xatosi: ' . get_class($e); }
     }
+    if (!$vals) {                                                   // define('KEY', 'v')  /  'KEY' => 'v'  /  KEY = v
+        if (preg_match_all('/define\s*\(\s*([\'"])([A-Za-z0-9_]+)\1\s*,\s*([\'"])(.*?)(?<!\\\\)\3\s*\)/s', $txt, $m, PREG_SET_ORDER)) foreach ($m as $x) $vals[$x[2]] = stripcslashes($x[4]);
+        if (preg_match_all('/([\'"])([A-Za-z0-9_]+)\1\s*=>\s*([\'"])(.*?)(?<!\\\\)\3/s', $txt, $m, PREG_SET_ORDER)) foreach ($m as $x) if (!isset($vals[$x[2]])) $vals[$x[2]] = stripcslashes($x[4]);
+        if ($vals) { $info['mode'] = 'regex'; $info['error'] = $info['error'] ?: null; }
+    }
+    $out = [];
+    foreach ($vals as $k => $v) { if (is_scalar($v) || $v === null) $out[strtoupper((string)$k)] = trim((string)$v); }
+    $info['keys'] = array_keys(array_filter($out, function ($v) { return $v !== ''; }));
+    return [$out, $info];
+}
+/** Values from argent_private/config.php. Never printed anywhere except where the admin explicitly asked for it (cron URL). */
+function private_config(bool $reload = false): array {
+    static $cfg = null;
+    if ($cfg === null || $reload) [$cfg] = private_config_read();
     return $cfg;
 }
 function cfg(string $key, $default = '') { $c = private_config(); return (isset($c[$key]) && $c[$key] !== '') ? $c[$key] : $default; }
+
+/**
+ * Writes config.php in the canonical format. $changes: KEY => new value ('' removes a key). Other keys are kept.
+ * Atomic (temp file + rename), mode 0600, directory created when missing. Reads the file back to verify.
+ * @return array [bool ok, string message]
+ */
+function private_config_write(array $changes): array {
+    $dir = private_dir() ?: private_dir_target();
+    if (path_inside_webroot($dir)) return [false, "Maxfiy papka public_html ichida ($dir). public_html bilan yonma-yon «argent_private» papkasini yarating."];
+    if (!is_dir($dir) && !@mkdir($dir, 0700, true)) return [false, "Papka yaratib bo'lmadi: $dir. Hosting File Manager'da shu papkani qo'lda yarating (public_html bilan yonma-yon, nomi: argent_private), keyin qayta saqlang."];
+    if (!is_writable($dir)) return [false, "Papka yozishga ochiq emas: $dir. File Manager → papka → Permissions: 700 (yoki 750) qiling va egasi sayt foydalanuvchisi ekanini tekshiring."];
+    $file = $dir . '/config.php';
+    if (is_file($file) && !is_writable($file)) return [false, "config.php yozishga ochiq emas ($file). File Manager'da huquqni 600 qilib qo'ying yoki faylni o'chirib qayta saqlang."];
+    [$cur] = private_config_read();
+    foreach ($changes as $k => $v) { $k = strtoupper($k); if ($v === '' || $v === null) unset($cur[$k]); else $cur[$k] = (string)$v; }
+    $order = []; foreach (CONFIG_KEYS as $k) if (isset($cur[$k])) $order[$k] = $cur[$k]; foreach ($cur as $k => $v) if (!isset($order[$k])) $order[$k] = $v;
+    $txt = "<?php\n/** ARGENT maxfiy sozlamalar. Admin panel (Sozlamalar → LC-UP monitoring) yozadi. Hech kimga yubormang. */\nreturn [\n";
+    foreach ($order as $k => $v) $txt .= '    ' . var_export($k, true) . ' => ' . var_export((string)$v, true) . ",\n";
+    $txt .= "];\n";
+    $tmp = $dir . '/config.php.tmp' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, $txt, LOCK_EX) === false) return [false, "Faylga yozib bo'lmadi ($dir). Diskda joy va huquqlarni tekshiring."];
+    @chmod($tmp, 0600);
+    if (!@rename($tmp, $file)) { @unlink($tmp); return [false, "config.php ni almashtirib bo'lmadi. Huquqlarni tekshiring."]; }
+    @chmod($file, 0600);
+    if (!is_file($dir . '/.htaccess')) @file_put_contents($dir . '/.htaccess', "Require all denied\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n");
+    if (function_exists('opcache_invalidate')) @opcache_invalidate($file, true);
+    clearstatcache(true, $file); private_dir(true); private_config(true);
+    [$back] = private_config_read();
+    foreach ($changes as $k => $v) { $k = strtoupper($k); $want = trim((string)$v); if (($back[$k] ?? '') !== $want) return [false, "Yozilgan qiymat qayta o'qilganda mos kelmadi ($k). Fayl: $file"]; }
+    return [true, "Saqlandi: $file"];
+}
 
 /** Small key/value store written by the admin panel (Telegram token, chat id, app url). Lives in the private folder. */
 function private_store_file(): ?string { $d = private_dir(); return $d ? $d . '/settings.json' : null; }

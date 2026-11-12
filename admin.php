@@ -2,7 +2,7 @@
 require_once __DIR__ . '/layout.php';
 require_once __DIR__ . '/report_lib.php';
 require_once __DIR__ . '/proofs.php';
-require_once __DIR__ . '/lcup_lib.php';
+require_once __DIR__ . '/lcup_report.php';
 require_admin();
 lcup_remember_app_url();
 lcup_stale_check();
@@ -60,6 +60,7 @@ $lastBk = $bk ? filemtime(end($bk)) : 0;
 if (!$lastBk || $lastBk < strtotime('-7 days')) $alerts[] = ['warn', $lastBk ? "Oxirgi zaxira nusxa " . floor((time() - $lastBk) / 86400) . " kun oldin olingan." : "Hali zaxira nusxa olinmagan.", '#settings', "Zaxira olish"];
 
 $jcounts = ['users' => count($users), 'branches' => count($B)];
+$lcTest = $_SESSION['lcup_selftest'] ?? null; unset($_SESSION['lcup_selftest']);
 
 ui_head('Admin panel');
 ui_start('admin');

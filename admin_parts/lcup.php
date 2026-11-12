@@ -2,7 +2,7 @@
 $mapRows = lcup_map_rows(false); $mapBy = []; foreach ($mapRows as $r) $mapBy[(int)$r['branch_id']] = $r;
 $cfgOk = (string)cfg('LCUP_PHONE', '') !== '' && (string)cfg('LCUP_PASSWORD', '') !== ''; $pd = private_dir();
 $self = lcup_app_url() ?: ((!empty($_SERVER['HTTP_HOST']) ? ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') : 'https://SAYT/argent'));
-$lastOk = lcup_state_get('last_success'); $test = $_SESSION['lcup_selftest'] ?? null; unset($_SESSION['lcup_selftest']);
+$lastOk = lcup_state_get('last_success');
 $v = function ($k) { return e(lcup_setting($k)); };
 ?>
 <div class="alert info" style="background:var(--primary-soft);color:var(--primary-text)"><?= icon('radar') ?><div class="grow">
@@ -20,11 +20,11 @@ $v = function ($k) { return e(lcup_setting($k)); };
       <?php if ($pd && path_inside_webroot($pd)): ?><div class="bad">Maxfiy papka public_html ICHIDA! Uni public_html dan tashqariga ko'chiring.</div><?php endif; ?>
     </div>
     <div class="row gap-2 row-wrap">
-      <form action="process.php" method="post" data-loading><?= csrf_field() ?><input type="hidden" name="action" value="lcup_selftest"><button class="btn btn-primary" type="submit"><?= icon('check-check', 'i-sm') ?> Ulanishni tekshirish</button></form>
+      <form action="process.php" method="post" data-loading><?= csrf_field() ?><input type="hidden" name="action" value="lcup_selftest"><input type="hidden" name="back" value="admin.php#lcup"><button class="btn btn-primary" type="submit"><?= icon('check-check', 'i-sm') ?> Ulanishni tekshirish</button></form>
       <form action="process.php" method="post" data-loading><?= csrf_field() ?><input type="hidden" name="action" value="lcup_diagnostics"><button class="btn" type="submit"><?= icon('folder-lock', 'i-sm') ?> Diagnostika</button></form>
       <form action="process.php" method="post" data-loading><?= csrf_field() ?><input type="hidden" name="action" value="lcup_run_now"><button class="btn" type="submit"><?= icon('refresh-cw', 'i-sm') ?> Hozir sinxronlash</button></form>
     </div>
-    <?php if ($test): ?><div class="lc-check" style="margin-top:6px"><?php foreach ($test as [$ok, $t]): ?><div class="<?= $ok === true ? 'ok' : ($ok === false ? 'bad' : 'warn') ?>"><?= e($t) ?></div><?php endforeach; ?></div><?php endif; ?>
+    <?php if ($lcTest): ?><div class="lc-check" style="margin-top:6px"><?php foreach ($lcTest as [$ok, $t]): ?><div class="<?= $ok === true ? 'ok' : ($ok === false ? 'bad' : 'warn') ?>"><?= e($t) ?></div><?php endforeach; ?></div><?php endif; ?>
     <p class="hint">«Diagnostika» LC-UP sahifalarining xom HTML'ini (token va parollarsiz) saqlaydi va ZIP qiladi — parser ishlamay qolsa menga yuborasiz.</p>
   </section>
 
@@ -55,14 +55,12 @@ $v = function ($k) { return e(lcup_setting($k)); };
 
 <div class="grid lg-g-2">
   <section class="card card-pad stack" aria-labelledby="lcTg">
-    <div class="row"><span class="icon-tile primary"><?= icon('send') ?></span><div><h2 class="card-title" id="lcTg">Telegram ogohlantirish</h2><p class="fs-sm text-3">Har bir qizil hodisa uchun xabar. Token <code>argent_private/</code> da saqlanadi.</p></div></div>
-    <form action="process.php" method="post" class="stack" data-loading autocomplete="off">
-      <?= csrf_field() ?><input type="hidden" name="action" value="lcup_save_telegram">
-      <label class="field"><span class="label">Bot token</span><input class="input" type="password" name="token" placeholder="<?= lcup_tg_ready() ? "••••••• (saqlangan — o'zgartirish uchun yangisini yozing)" : '123456:ABC…' ?>" autocomplete="off"></label>
-      <label class="field"><span class="label">Chat ID</span><input class="input" name="chat" value="<?= e((string)private_get('telegram_chat', '')) ?>" placeholder="123456789" inputmode="numeric"></label>
-      <div class="row gap-2 row-wrap"><button class="btn btn-primary" type="submit"><?= icon('check', 'i-sm') ?> Saqlash</button>
-        <button class="btn" type="submit" formaction="process.php" name="test" value="1"><?= icon('send', 'i-sm') ?> Saqlab, sinov xabari yuborish</button></div>
-    </form>
+    <div class="row"><span class="icon-tile primary"><?= icon('send', 'i-sm') ?></span><div><h2 class="card-title" id="lcTg">Telegram va hisobotlar</h2><p class="fs-sm text-3">Token, chat ID va parollar endi <a href="admin.php#settings" style="text-decoration:underline">Sozlamalar → LC-UP monitoring</a> da.</p></div></div>
+    <p class="fs-sm text-2">Telegram: <?= lcup_tg_ready() ? "ulangan ✓" : "<b class='text-out'>sozlanmagan</b>" ?> · kunlik xulosa <b><?= $v('summary_time') ?></b> da, haftalik hisobot dushanba <b><?= $v('weekly_time') ?></b> da.</p>
+    <div class="row gap-2 row-wrap">
+      <form action="process.php" method="post" data-loading><?= csrf_field() ?><input type="hidden" name="action" value="lcup_send_report"><input type="hidden" name="kind" value="daily"><button class="btn" type="submit"><?= icon('send', 'i-sm') ?> Kunlik xulosani hozir yuborish</button></form>
+      <form action="process.php" method="post" data-loading><?= csrf_field() ?><input type="hidden" name="action" value="lcup_send_report"><input type="hidden" name="kind" value="weekly"><button class="btn" type="submit"><?= icon('send', 'i-sm') ?> Haftalik hisobotni hozir yuborish</button></form>
+    </div>
   </section>
 
   <section class="card card-pad stack" aria-labelledby="lcSet">
@@ -78,11 +76,14 @@ $v = function ($k) { return e(lcup_setting($k)); };
         <label class="field"><span class="hint">Tungi to'liq tekshiruv boshlanishi</span><input class="input input-sm" type="time" name="night_time" value="<?= $v('night_time') ?>"></label>
         <label class="field"><span class="hint">Har daqiqa: yangi sahifalar soni</span><input class="input input-sm" name="hot_pages" value="<?= $v('hot_pages') ?>" inputmode="numeric"></label>
         <label class="field"><span class="hint">Har daqiqa: aylanma sahifalar soni</span><input class="input input-sm" name="warm_pages" value="<?= $v('warm_pages') ?>" inputmode="numeric"></label>
+        <label class="field"><span class="hint">Kunlik xulosa vaqti</span><input class="input input-sm" type="time" name="summary_time" value="<?= $v('summary_time') ?>"></label>
+        <label class="field"><span class="hint">Haftalik hisobot (dushanba) vaqti</span><input class="input input-sm" type="time" name="weekly_time" value="<?= $v('weekly_time') ?>"></label>
+        <label class="field"><span class="hint">Tezkor tuzatish oynasi (daqiqa)</span><input class="input input-sm" name="quick_fix_min" value="<?= $v('quick_fix_min') ?>" inputmode="numeric"></label>
         <label class="field"><span class="hint">So'rovlar orasida pauza (ms)</span><input class="input input-sm" name="delay_ms" value="<?= $v('delay_ms') ?>" inputmode="numeric"></label>
         <label class="field"><span class="hint">Tunda har ishga tushishda sahifa</span><input class="input input-sm" name="night_pages_per_run" value="<?= $v('night_pages_per_run') ?>" inputmode="numeric"></label>
       </div>
       <label class="row card-pad" style="border:1px solid var(--border);border-radius:14px;background:var(--surface-2);align-items:flex-start;gap:12px;cursor:pointer"><span class="switch"><input type="checkbox" name="allow_switch_post" value="1" <?= lcup_setting('allow_switch_post') === '1' ? 'checked' : '' ?>><i></i></span>
-        <span><b class="fs-md">Filialni almashtirishga ruxsat</b><br><span class="hint">LC-UP da filial tanlagich faqat so'rov (POST) bilan ishlaydi. Yoqilsa, monitoring FAQAT shu bitta chaqiruvni yuboradi (joriy filialni tanlaydi, ma'lumotni o'zgartirmaydi). O'chiq bo'lsa, faqat LC-UP akkaunti hozir turgan filial o'qiladi. <b>Tavsiya:</b> monitoring uchun alohida LC-UP xodim akkaunti oching — filial xodim yozuvida saqlansa, sizning o'z ish sessiyangizdagi filial almashib ketmasligi uchun.</span></span></label>
+        <span><b class="fs-md">Livewire o'qish amallari (oq ro'yxat)</b><br><span class="hint">Yoqilsa, monitoring faqat <code>lcup_policy.php</code> dagi ro'yxatni yuboradi: filial tanlagich (<code>filial_id</code>, <code>change_filial</code>), xodim tanlash/davr/bo'lim/«yana ko'rsatish» va o'quvchi «To'lovlar» tabi. Saqlash, tahrirlash, o'chirish, to'lovni tiklash kabi hamma narsa kodda taqiqlangan. O'chiq bo'lsa faqat akkaunt turgan filial va birinchi xodim o'qiladi. Har so'rov pastdagi jurnalga yoziladi.</span></span></label>
       <label class="row" style="gap:10px;cursor:pointer"><span class="switch"><input type="checkbox" name="alerts_on" value="1" <?= lcup_setting('alerts_on') === '1' ? 'checked' : '' ?>><i></i></span><b class="fs-md">Telegram ogohlantirishlari yoqilgan</b></label>
       <details class="lc-details"><summary>LC-UP sahifa manzillari (odatda o'zgartirish shart emas)</summary><div class="stack" style="margin-top:8px">
         <?php foreach (['worker_url' => 'Xodimlar faoliyati', 'archive_url' => "O'chirilgan to'lovlar", 'payments_url' => "To'lovlar ro'yxati", 'discount_url' => 'Chegirma hisoboti', 'debtors_url' => 'Qarzdorlar'] as $k => $l): ?>
@@ -106,3 +107,12 @@ $v = function ($k) { return e(lcup_setting($k)); };
   <p class="hint">Ko'chirgandan keyin FTP orqali yangi versiyani yuklaganda <code>harvards_finance.sqlite</code> faylini qayta yuklamang — ilova bazani <code>argent_private/</code> dan oladi.</p>
   <?php endif; ?>
 </section>
+
+<?php $reqs = db()->query("SELECT * FROM lcup_reqlog ORDER BY id DESC LIMIT 40")->fetchAll(); $gaps = db()->query("SELECT * FROM lcup_gaps ORDER BY id DESC LIMIT 8")->fetchAll(); ?>
+<div class="grid lg-g-2">
+  <section class="card card-pad stack"><div class="row"><span class="icon-tile primary"><?= icon('shield-check') ?></span><div><h2 class="card-title">LC-UP ga yuborilgan so'rovlar</h2><p class="fs-sm text-3">Oxirgi 40 ta. «REFUSED» = oq ro'yxat rad etgan so'rov (yuborilmagan).</p></div></div>
+    <div class="pre-box" style="max-height:340px"><?php foreach ($reqs as $q): ?><?= e(date('H:i:s', strtotime($q['at'])) . ' ' . str_pad($q['method'], 7) . ' ' . ($q['purpose'] ?: '') . ' ' . $q['path'] . ' ' . $q['detail'] . ' ' . ($q['status'] ?: '')) ?>
+<?php endforeach; if (!$reqs): ?>Hali so'rov yo'q.<?php endif; ?></div></section>
+  <section class="card card-pad stack"><div class="row"><span class="icon-tile out"><?= icon('clock-alert') ?></span><div><h2 class="card-title">Uzilishlar</h2><p class="fs-sm text-3"><?= (int)lcup_num('catchup_gap_min') ?> daqiqadan ko'p ishlamagan davrlar avtomatik to'ldiriladi</p></div></div>
+    <?php if ($gaps): ?><div class="lc-check"><?php foreach ($gaps as $g): ?><div class="<?= $g['filled'] ? 'ok' : 'warn' ?>"><?= e(lcup_gap_text($g)) ?><?= $g['note'] ? ' — ' . e($g['note']) : '' ?></div><?php endforeach; ?></div><?php else: ?><p class="fs-sm text-3">Uzilish qayd etilmagan.</p><?php endif; ?></section>
+</div>

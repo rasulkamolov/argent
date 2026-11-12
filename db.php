@@ -12,7 +12,7 @@ if (!defined('DB_FILE')) {
     define('DB_FILE', db_resolve_file());
 }
 if (!defined('DEFAULT_BRANCH_NAME')) define('DEFAULT_BRANCH_NAME', "OXFORD Bo'zqal'a");
-const DB_SCHEMA_VERSION = 6;   // v2: multi-branch, v3: branches.balance_ok, v4: transactions.proof, v5: transactions.proof_name, v6: LC-UP monitoring
+const DB_SCHEMA_VERSION = 7;   // v2: multi-branch, v3: branches.balance_ok, v4: transactions.proof, v5: transactions.proof_name, v6: LC-UP monitoring, v7: LC-UP whitelist log, charges, gaps
 
 function db_has_column(PDO $c, string $table, string $col): bool {
     foreach ($c->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -221,6 +221,25 @@ function db_migrate(PDO $c): void {
             id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finished_at TEXT, ok INTEGER, trigger TEXT,
             requests INTEGER DEFAULT 0, new_events INTEGER DEFAULT 0, seconds REAL, message TEXT
         )");
+        /* ---- v7: request log of everything sent to LC-UP, monthly-charge snapshot, outages ---- */
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_reqlog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, method TEXT, path TEXT, purpose TEXT, detail TEXT, status INTEGER, ms INTEGER
+        )");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcreq_at ON lcup_reqlog(at)");
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_charges (
+            branch_id INTEGER NOT NULL, student_id TEXT NOT NULL, ckey TEXT NOT NULL,
+            amount REAL, pay_date TEXT, status TEXT, group_name TEXT, staff TEXT, created_at TEXT, first_seen TEXT, last_seen TEXT,
+            PRIMARY KEY (branch_id, student_id, ckey)
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_student_ids (
+            branch_id INTEGER NOT NULL, student_id TEXT NOT NULL, name TEXT DEFAULT '', last_check TEXT,
+            PRIMARY KEY (branch_id, student_id)
+        )");
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_gaps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, from_at TEXT NOT NULL, to_at TEXT NOT NULL, filled INTEGER DEFAULT 0, note TEXT
+        )");
+        db_add_column($c, 'lcup_debts', 'group_name', "TEXT DEFAULT ''");
+
         // suggested mapping (editable in Admin → LC-UP): Oxford LC (414) = Yangibozor Markaz, Oxford Bo'zqal'a = OXFORD Bo'zqal'a
         if ((int)$c->query("SELECT COUNT(*) FROM lcup_branch_map")->fetchColumn() === 0) {
             $m = $c->prepare("INSERT OR IGNORE INTO lcup_branch_map (branch_id, lcup_key, lcup_name) VALUES (?,?,?)");

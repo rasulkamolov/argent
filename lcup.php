@@ -1,7 +1,7 @@
 <?php
 /** LC-UP nazorat: append-only feed of every payment-related change found in LC-UP, health of the sync, review ("ko'rildi"). Administrator only. */
 require_once __DIR__ . '/layout.php';
-require_once __DIR__ . '/lcup_lib.php';
+require_once __DIR__ . '/lcup_report.php';
 require_admin();
 lcup_remember_app_url();
 lcup_stale_check();
@@ -18,7 +18,7 @@ if (isset($_GET['download'])) {
 
 /* ---- filters ---- */
 $B = branches_all(); $mapIds = lcup_branch_ids();
-$fb = (int)($_GET['branch'] ?? 0); $fsev = in_array($_GET['sev'] ?? '', ['red', 'info'], true) ? $_GET['sev'] : '';
+$fb = (int)($_GET['branch'] ?? 0); $fsev = in_array($_GET['sev'] ?? '', ['red', 'yellow', 'info'], true) ? $_GET['sev'] : '';
 $fst = in_array($_GET['status'] ?? '', ['unread', 'reviewed'], true) ? $_GET['status'] : '';
 $ftype = preg_replace('/[^a-z_]/', '', (string)($_GET['type'] ?? '')); $fq = trim((string)($_GET['q'] ?? ''));
 $from = valid_date($_GET['from'] ?? null) ? $_GET['from'] : ''; $to = valid_date($_GET['to'] ?? null) ? $_GET['to'] : '';
@@ -42,6 +42,7 @@ $qs = function (array $o) use ($fb, $fsev, $fst, $ftype, $fq, $from, $to, $hist,
 /* ---- health ---- */
 $last = lcup_state_get('last_success'); $lastRun = lcup_state_get('last_run'); $fails = (int)lcup_state_get('fail_count', 0); $lastErr = (string)lcup_state_get('last_error', '');
 $minRun = lcup_minutes_since_run(); $stale = $minRun !== null && $minRun >= 5; $never = $lastRun === null;
+$gaps = db()->query("SELECT * FROM lcup_gaps ORDER BY id DESC LIMIT 5")->fetchAll();
 $warn = json_decode((string)lcup_state_get('last_warnings', '[]'), true) ?: []; $ign = json_decode((string)lcup_state_get('ignored_texts', '{}'), true) ?: []; arsort($ign);
 $baseUrl = rtrim((string)cfg('LCUP_BASE_URL', 'https://oxfordlc.lc-up.com'), '/');
 $unread = lcup_unread_count(); $labels = lcup_flag_labels(); $typeL = lcup_type_labels();
@@ -75,6 +76,7 @@ ui_start('lcup');
       <div class="kv"><div class="k">Tungi to'liq tekshiruv · <?= e($m['branch_name']) ?></div><div class="v fs-sm"><?= $nl ? e($nl) : (($ns['date'] ?? '') === date('Y-m-d') ? 'bugun davom etmoqda (' . (int)($ns['pages'] ?? 0) . ' sahifa)' : "hali bo'lmagan") ?></div></div>
       <?php endforeach; ?>
     </div>
+    <?php if ($gaps): ?><div class="lc-check" style="margin-top:12px"><?php foreach ($gaps as $g): ?><div class="<?= $g['filled'] ? 'ok' : 'warn' ?>">⏸ Uzilish: <?= e(lcup_gap_text($g)) ?><?= $g['note'] ? ' — ' . e($g['note']) : '' ?></div><?php endforeach; ?></div><?php endif; ?>
     <?php if ($warn): ?><div class="lc-check" style="margin-top:12px"><?php foreach ($warn as $x): ?><div class="warn"><?= e($x) ?></div><?php endforeach; ?></div><?php endif; ?>
     <?php if ($ign): ?><details class="lc-details" style="margin-top:10px"><summary>E'tiborga olinmagan jurnal yozuvlari (<?= count($ign) ?> xil)</summary><div class="lc-sub"><?php foreach (array_slice($ign, 0, 12, true) as $t => $n): ?><span><?= e($t) ?> <b>×<?= (int)$n ?></b></span><?php endforeach; ?><span class="text-3">Agar bu yerda to'lovga aloqador matn bo'lsa, menga yuboring — qoidalarga qo'shaman.</span></div></details><?php endif; ?>
   </section>
@@ -91,7 +93,7 @@ ui_start('lcup');
     <div class="row row-wrap" style="gap:8px">
       <select class="select input-sm" name="branch" style="max-width:200px" aria-label="Filial"><option value="0">Barcha filiallar</option><?php foreach ($mapIds as $id): ?><option value="<?= (int)$id ?>" <?= $fb === (int)$id ? 'selected' : '' ?>><?= e($B[$id]['name'] ?? $id) ?></option><?php endforeach; ?></select>
       <select class="select input-sm" name="status" style="max-width:190px" aria-label="Holat"><option value="">Barchasi</option><option value="unread" <?= $fst === 'unread' ? 'selected' : '' ?>>Ko'rilmagan qizil</option><option value="reviewed" <?= $fst === 'reviewed' ? 'selected' : '' ?>>Ko'rilgan</option></select>
-      <select class="select input-sm" name="sev" style="max-width:150px" aria-label="Daraja"><option value="">Qizil + oddiy</option><option value="red" <?= $fsev === 'red' ? 'selected' : '' ?>>Faqat qizil</option><option value="info" <?= $fsev === 'info' ? 'selected' : '' ?>>Faqat oddiy</option></select>
+      <select class="select input-sm" name="sev" style="max-width:150px" aria-label="Daraja"><option value="">🔴 🟡 va oddiy</option><option value="red" <?= $fsev === 'red' ? 'selected' : '' ?>>🔴 Faqat qizil</option><option value="yellow" <?= $fsev === 'yellow' ? 'selected' : '' ?>>🟡 Faqat sariq</option><option value="info" <?= $fsev === 'info' ? 'selected' : '' ?>>Faqat oddiy</option></select>
       <select class="select input-sm" name="type" style="max-width:230px" aria-label="Turi"><option value="">Barcha turlar</option><?php foreach ($typeL as $k => $l): ?><option value="<?= e($k) ?>" <?= $ftype === $k ? 'selected' : '' ?>><?= e($l) ?></option><?php endforeach; ?></select>
       <input class="input input-sm" type="date" name="from" value="<?= e($from) ?>" style="max-width:160px" aria-label="Boshlanish"><input class="input input-sm" type="date" name="to" value="<?= e($to) ?>" style="max-width:160px" aria-label="Tugash">
       <input class="input input-sm" type="search" name="q" value="<?= e($fq) ?>" placeholder="Talaba, xodim, ID…" style="max-width:200px">
@@ -109,11 +111,11 @@ ui_start('lcup');
         <thead><tr><th>Vaqt</th><th>Filial</th><th>Hodisa</th><th>Talaba</th><th class="r">Summa</th><th>Tafsilot</th><th></th></tr></thead>
         <tbody>
         <?php foreach ($events as $ev): $red = $ev['severity'] === 'red'; $fl = array_filter(explode(',', (string)$ev['flags'])); $bb = $ev['branch_id'] ? ($B[(int)$ev['branch_id']] ?? null) : null; ?>
-          <tr class="lc-ev <?= $red ? 'is-red' : '' ?> <?= $ev['backfill'] ? 'is-hist' : '' ?> <?= $pickId === (int)$ev['id'] ? 'is-pick' : '' ?>" id="ev<?= (int)$ev['id'] ?>">
+          <tr class="lc-ev <?= $red ? 'is-red' : ($ev['severity'] === 'yellow' ? 'is-yellow' : '') ?> <?= $ev['backfill'] ? 'is-hist' : '' ?> <?= $pickId === (int)$ev['id'] ? 'is-pick' : '' ?>" id="ev<?= (int)$ev['id'] ?>">
             <td class="cell-title"><div><b class="num"><?= e(date('d.m H:i', strtotime($ev['lcup_time'] ?: $ev['detected_at']))) ?></b></div><div class="fs-xs text-3 fw-5">aniqlandi <?= e(date('d.m H:i', strtotime($ev['detected_at']))) ?><?= $ev['backfill'] ? ' · tarixiy' : '' ?></div></td>
             <td data-label="Filial"><?= $bb ? '<span class="lc-br">' . branch_avatar($bb, 'xs') . '<span class="fs-sm">' . e($bb['name']) . '</span></span>' : '<span class="text-3">—</span>' ?></td>
-            <td data-label="Hodisa"><span class="badge <?= $red ? 'badge-danger' : '' ?>"><?= e($typeL[$ev['type']] ?? $ev['type']) ?></span><?php if ($ev['staff']): ?><div class="fs-sm text-2" style="margin-top:4px"><?= icon('user-round', 'i-xs') ?> <?= e($ev['staff']) ?></div><?php endif; ?>
-              <?php if ($fl): ?><div class="lc-flags"><?php foreach ($fl as $f): ?><span class="badge <?= in_array($f, LCUP_RED_FLAGS, true) || in_array($f, ['late_edit', 'late_delete', 'no_reason'], true) ? 'badge-danger' : 'badge-warn' ?>"><?= e($labels[$f] ?? $f) ?></span><?php endforeach; ?></div><?php endif; ?></td>
+            <td data-label="Hodisa"><span class="badge <?= $red ? 'badge-danger' : ($ev['severity'] === 'yellow' ? 'badge-warn' : '') ?>"><?= $red ? '🔴 ' : ($ev['severity'] === 'yellow' ? '🟡 ' : '') ?><?= e($typeL[$ev['type']] ?? $ev['type']) ?></span><?php if ($ev['staff']): ?><div class="fs-sm text-2" style="margin-top:4px"><?= icon('user-round', 'i-xs') ?> <?= e($ev['staff']) ?></div><?php endif; ?>
+              <?php if ($fl): ?><div class="lc-flags"><?php foreach ($fl as $f): ?><span class="badge <?= in_array($f, LCUP_RED_FLAGS, true) || in_array($f, ['late_edit', 'late_delete', 'no_reason'], true) ? 'badge-danger' : (in_array($f, LCUP_YELLOW_FLAGS, true) ? 'badge-warn' : '') ?>"><?= e($labels[$f] ?? $f) ?></span><?php endforeach; ?></div><?php endif; ?></td>
             <td data-label="Talaba"><?php if ($ev['student_name'] || $ev['student_id']): ?><?php if ($ev['student_id']): ?><a href="<?= e($baseUrl . '/admin/students/' . rawurlencode($ev['student_id'])) ?>" target="_blank" rel="noopener noreferrer" style="text-decoration:underline;text-decoration-color:var(--border-strong);text-underline-offset:3px"><?= e($ev['student_name'] ?: '#' . $ev['student_id']) ?></a> <span class="text-3 fs-xs">#<?= e($ev['student_id']) ?></span><?php else: ?><?= e($ev['student_name']) ?><?php endif; ?><?php if ($ev['group_name']): ?><div class="fs-xs text-3"><?= e($ev['group_name']) ?></div><?php endif; ?><?php else: ?><span class="text-3">—</span><?php endif; ?></td>
             <td class="r num fw-7" data-label="Summa"><?= $ev['amount'] !== null ? e(fmt($ev['amount'])) : '—' ?></td>
             <td data-label="Tafsilot"><div class="lc-chg"><?= e($ev['details']) ?></div>

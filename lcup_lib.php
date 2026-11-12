@@ -5,16 +5,18 @@
  */
 require_once __DIR__ . '/layout.php';   // fmt(), e() ... (definitions only, prints nothing)
 
-/** Flags that turn an event red (and trigger a Telegram alert). */
-const LCUP_RED_FLAGS = ['amount_changed', 'edited', 'deleted', 'debt_reduction', 'new_discount', 'discount_up', 'small_amount', 'off_hours', 'cash_missing', 'no_details'];
+/** Flags that make an event RED (instant Telegram alert + unread counter). */
+const LCUP_RED_FLAGS = ['amount_down', 'amount_zero', 'deleted', 'debt_reduction', 'new_discount', 'discount_changed', 'discount_removed', 'charge_changed', 'small_amount', 'off_hours', 'cash_missing', 'no_details', 'settings_changed', 'payment_missing'];
+/** Flags that make an event YELLOW (only in the daily summary): increases, date/method/group changes, quick corrections, non-zero freeze charges. */
+const LCUP_YELLOW_FLAGS = ['amount_up', 'field_change', 'quick_fix', 'freeze_nonzero'];
 
 function lcup_now(): string { return date('Y-m-d H:i:s'); }
 function lcup_defaults(): array {
-    return ['small_amount' => '5000', 'work_from' => '08:00', 'work_to' => '21:00', 'late_minutes' => '60', 'eod_time' => '21:30',
-            'delay_ms' => '350', 'budget_s' => '40', 'window_days' => '40', 'debt_interval' => '5', 'discount_interval' => '5',
+    return ['small_amount' => '5000', 'work_from' => '08:00', 'work_to' => '21:00', 'late_minutes' => '60', 'eod_time' => '21:00',
+            'delay_ms' => '350', 'budget_s' => '40', 'window_days' => '40', 'debt_interval' => '1', 'discount_interval' => '1', 'monitor_name' => '', 'summary_time' => '21:00', 'weekly_time' => '09:00', 'quick_fix_min' => '10', 'catchup_gap_min' => '10',
             'hot_pages' => '3', 'warm_pages' => '3', 'night_time' => '03:00', 'night_max_pages' => '3000', 'night_pages_per_run' => '25',
-            'allow_switch_post' => '0', 'switch_url' => '',
-            'worker_url' => '/admin/worker_reports', 'archive_url' => '/admin/archive/tolovlars', 'payments_url' => '/admin/tolovlars',
+            'allow_switch_post' => '1', 'switch_url' => '',
+            'worker_url' => '/admin/worker_reports', 'students_url' => '/admin/students', 'charge_per_run' => '20', 'archive_url' => '/admin/archive/tolovlars', 'payments_url' => '/admin/tolovlars',
             'discount_url' => '/admin/discount', 'debtors_url' => '/admin/qarzdorlar', 'alerts_on' => '1'];
 }
 function lcup_setting(string $k) { $d = lcup_defaults(); $v = setting('lcup.' . $k, $d[$k] ?? ''); return ($v === '' || $v === null) ? ($d[$k] ?? '') : $v; }
@@ -61,12 +63,13 @@ function lcup_type_labels(): array {
             'log_edit' => "To'lov tahrirlandi (tafsilotsiz)", 'log_delete' => "To'lov o'chirildi (jurnal)", 'debt_reduced' => 'Qarz kamaygan',
             'amount_changed' => "To'lov summasi o'zgartirilgan", 'payment_missing' => "To'lov ro'yxatda topilmadi", 'staff_activity' => 'Xodim faoliyati (tafsilotsiz)', 'discount_new' => 'Yangi chegirma', 'discount_changed' => "Chegirma o'zgargan", 'freeze_charge' => 'Muzlatishda pul yechildi',
             'student_frozen' => 'Talaba muzlatildi', 'student_activated' => 'Talaba aktivlashtirildi', 'payment_other' => "To'lov bilan bog'liq amal",
-            'cash_missing' => 'Naqd Argentga kiritilmagan', 'webhook' => 'Webhook', 'system' => 'Tizim', 'other' => 'Boshqa'];
+            'cash_missing' => 'Naqd Argentga kiritilmagan', 'charge_changed' => "Oylik to'lov summasi o'zgartirilgan", 'discount_removed' => "Chegirma o'chirilgan", 'settings_changed' => "Monitoring sozlamalari o'zgartirildi", 'webhook' => 'Webhook', 'system' => 'Tizim', 'other' => 'Boshqa'];
 }
 function lcup_type_label(string $t): string { return lcup_type_labels()[$t] ?? $t; }
 function lcup_flag_labels(): array {
     $late = (int)lcup_num('late_minutes'); $lt = $late % 60 === 0 ? ($late / 60) . ' soatdan keyin' : $late . " daqiqadan keyin";
-    return ['amount_changed' => "Summa o'zgartirilgan", 'edited' => 'Tahrirlangan', 'late_edit' => "$lt tahrirlangan", 'deleted' => "O'chirilgan", 'late_delete' => "$lt o'chirilgan", 'no_reason' => 'Sababsiz',
+    return ['amount_down' => 'Summa kamaytirilgan', 'amount_zero' => '0 so\'mga tushirilgan', 'amount_up' => 'Summa oshirilgan', 'field_change' => "Sana/usul/guruh o'zgargan", 'quick_fix' => 'Yaratilgach darrov tuzatilgan', 'freeze_nonzero' => "Muzlatishda pul yechilgan", 'charge_changed' => "Oylik to'lov o'zgargan", 'discount_changed' => "Chegirma o'zgargan", 'discount_removed' => "Chegirma o'chirilgan", 'settings_changed' => "Sozlamalar o'zgargan", 'payment_missing' => "Ro'yxatda yo'q", 'gap' => 'Uzilish davrida aniqlangan',
+            'amount_changed' => "Summa o'zgartirilgan", 'edited' => 'Tahrirlangan', 'late_edit' => "$lt tahrirlangan", 'deleted' => "O'chirilgan", 'late_delete' => "$lt o'chirilgan", 'no_reason' => 'Sababsiz',
             'debt_reduction' => 'Qarz/hisob kamaygan', 'new_discount' => 'Yangi chegirma', 'discount_up' => 'Chegirma oshgan', 'small_amount' => fmt(lcup_num('small_amount')) . " dan kam",
             'off_hours' => 'Ish vaqtidan tashqari', 'cash_missing' => 'Naqd Argentga kiritilmagan', 'no_details' => "Tafsilot yo'q", 'weak' => "Taxminiy aniqlash"];
 }
@@ -92,36 +95,56 @@ function lcup_compute_flags(array $e): array {
     $f = (array)($e['flags'] ?? []); $type = $e['type'] ?? 'other';
     $when = !empty($e['lcup_time']) ? strtotime($e['lcup_time']) : time();
     $age = (!empty($e['created_at']) && ($c = strtotime($e['created_at']))) ? ($when - $c) : null;
-    $late = (int)lcup_num('late_minutes') * 60;
+    $late = (int)lcup_num('late_minutes') * 60; $quick = (int)lcup_num('quick_fix_min') * 60;
     $before = (array)($e['before'] ?? []); $after = (array)($e['after'] ?? []);
     $charge = !empty($e['is_charge']) || (isset($before['amount']) && (float)$before['amount'] < 0);
-    if ($type === 'payment_changed' || $type === 'log_edit') {
-        $f[] = 'edited'; if ($age !== null && $age > $late) $f[] = 'late_edit';
-        if ($type === 'log_edit' && !$before && empty($e['amount'])) $f[] = 'no_details';
+    $amountFlags = function () use (&$f, $before, $after, $age, $quick, $late) {
+        if (isset($before['amount'], $after['amount'])) {
+            if ((float)$after['amount'] < (float)$before['amount']) { $f[] = 'amount_down'; if (abs((float)$after['amount']) < 0.5) $f[] = 'amount_zero'; }
+            elseif ((float)$after['amount'] > (float)$before['amount']) $f[] = 'amount_up';
+        }
+        if ($age !== null && $age > $late) $f[] = 'late_edit';
+        if ($age !== null && $age >= 0 && $age <= $quick) $f[] = 'quick_fix';        // fixed within minutes of creation: a typo, not a manipulation
+    };
+    if ($type === 'amount_changed') { $f[] = 'edited'; $amountFlags(); }
+    if ($type === 'payment_changed') {
+        $f[] = 'edited'; $amountFlags();
+        if (array_diff(array_keys($after), ['amount'])) $f[] = 'field_change';
         if ($charge && isset($before['amount'], $after['amount']) && abs((float)$after['amount']) < abs((float)$before['amount'])) $f[] = 'debt_reduction';
-        if ($charge && $type === 'log_edit') $f[] = 'debt_reduction';            // "minus to'lov tahrirlandi": a charge was edited
     }
+    if ($type === 'log_edit') { $f[] = 'edited'; if ($charge) $f[] = 'debt_reduction'; else $f[] = 'no_details'; }
     if ($type === 'payment_deleted' || $type === 'log_delete') {
         $f[] = 'deleted'; if ($age !== null && $age > $late) $f[] = 'late_delete';
         if ($type === 'payment_deleted' && trim((string)($e['reason'] ?? '')) === '') $f[] = 'no_reason';
         if ($charge) $f[] = 'debt_reduction';
     }
-    if ($type === 'amount_changed') $f[] = 'amount_changed';
     if ($type === 'payment_created' && !$charge && isset($e['amount']) && (float)$e['amount'] > 0 && (float)$e['amount'] < lcup_num('small_amount')) $f[] = 'small_amount';
+    if ($type === 'freeze_charge' && isset($e['amount']) && abs((float)$e['amount']) >= 0.5) $f[] = 'freeze_nonzero';
     if ($type === 'debt_reduced') $f[] = 'debt_reduction';
     if ($type === 'discount_new') $f[] = 'new_discount';
-    if ($type === 'discount_changed' && ((float)($after['num'] ?? 0) > (float)($before['num'] ?? 0))) $f[] = 'discount_up';
+    if ($type === 'discount_changed') $f[] = 'discount_changed';
+    if ($type === 'discount_removed') $f[] = 'discount_removed';
+    if ($type === 'charge_changed') $f[] = 'charge_changed';
     if ($type === 'cash_missing') $f[] = 'cash_missing';
-    if (!in_array($type, ['cash_missing', 'system', 'webhook', 'debt_reduced', 'amount_changed', 'payment_missing', 'staff_activity'], true)) {
+    if ($type === 'settings_changed') $f[] = 'settings_changed';
+    if ($type === 'payment_missing') $f[] = 'payment_missing';
+    if (!in_array($type, ['cash_missing', 'system', 'webhook', 'debt_reduced', 'amount_changed', 'payment_missing', 'staff_activity', 'settings_changed', 'charge_changed', 'discount_changed', 'discount_new', 'discount_removed'], true)) {
         $t = !empty($e['lcup_time']) ? substr($e['lcup_time'], 11, 5) : date('H:i');
-        if (strlen($t) === 5 && lcup_outside_hours($t) && !in_array($type, ['discount_changed'], true)) $f[] = 'off_hours';
+        if (strlen($t) === 5 && lcup_outside_hours($t)) $f[] = 'off_hours';
     }
     return array_values(array_unique($f));
+}
+/** 'red' | 'yellow' | 'info' from the flags. A quick correction (fixed within minutes of creation) never makes an amount edit red. */
+function lcup_severity(array $flags): string {
+    $red = array_intersect($flags, LCUP_RED_FLAGS);
+    if (in_array('quick_fix', $flags, true)) $red = array_diff($red, ['amount_down', 'amount_zero']);
+    if ($red) return 'red';
+    return array_intersect($flags, LCUP_YELLOW_FLAGS) ? 'yellow' : 'info';
 }
 /** Appends an event. Returns its id, or null when the same event is already stored (dedupe). */
 function lcup_event_add(array $e): ?int {
     $flags = lcup_compute_flags($e);
-    $sev = (empty($e['info_only']) && array_intersect($flags, LCUP_RED_FLAGS)) ? 'red' : 'info';
+    $sev = empty($e['info_only']) ? lcup_severity($flags) : 'info';
     $now = lcup_now(); $lt = !empty($e['lcup_time']) ? $e['lcup_time'] : null;
     $cut = function ($s, $n) { return $s === null ? null : mb_substr((string)$s, 0, $n); };
     $st = db()->prepare("INSERT OR IGNORE INTO lcup_events (detected_at, lcup_time, event_date, branch_id, source, type, staff, student_id, student_name, group_name, amount, method,
@@ -146,13 +169,13 @@ function lcup_review(int $id, int $userId, string $note): bool {
 
 /* ----------------------------------------------------------------- telegram */
 function lcup_tg(): array {
-    $tok = (string)private_get('telegram_token', '') ?: (string)cfg('TELEGRAM_BOT_TOKEN', '');
-    $chat = (string)private_get('telegram_chat', '') ?: (string)cfg('TELEGRAM_CHAT_ID', '');
+    $tok = (string)cfg('TELEGRAM_BOT_TOKEN', '') ?: (string)private_get('telegram_token', '');       // config.php first (written by the admin panel), settings.json = older installs
+    $chat = (string)cfg('TELEGRAM_CHAT_ID', '') ?: (string)private_get('telegram_chat', '');
     return [$tok, $chat];
 }
 function lcup_tg_ready(): bool { [$t, $c] = lcup_tg(); return $t !== '' && $c !== ''; }
-function lcup_tg_send(string $html, ?string &$err = null): bool {
-    [$tok, $chat] = lcup_tg();
+function lcup_tg_send(string $html, ?string &$err = null, ?array $creds = null): bool {
+    [$tok, $chat] = $creds ?: lcup_tg();
     if ($tok === '' || $chat === '') { $err = "Telegram sozlanmagan"; return false; }
     if (!function_exists('curl_init')) { $err = "PHP cURL yo'q"; return false; }
     $api = rtrim((string)cfg('TELEGRAM_API_BASE', 'https://api.telegram.org'), '/');
