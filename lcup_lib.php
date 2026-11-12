@@ -190,16 +190,23 @@ function lcup_tg_send(string $html, ?string &$err = null, ?array $creds = null):
     if ($code !== 200 || empty($j['ok'])) { $err = lcup_redact("Telegram xatosi ($code): " . ($j['description'] ?? mb_substr((string)$body, 0, 120))); return false; }
     return true;
 }
-function lcup_app_url(): string {
-    $u = (string)private_get('app_url', '');
-    return $u !== '' ? rtrim($u, '/') : '';
-}
-/** Remember how the admin reaches the app, so cron/CLI alerts can contain links. */
-function lcup_remember_app_url(): void {
-    if (PHP_SAPI === 'cli' || empty($_SERVER['HTTP_HOST'])) return;
+/** URL of the app built from the CURRENT request (scheme + host + script directory); '' in CLI/cron where there is no request. */
+function lcup_current_url(): string {
+    if (PHP_SAPI === 'cli' || empty($_SERVER['HTTP_HOST'])) return '';
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
-    $u = ($https ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-    if (private_get('app_url', '') !== $u) private_set(['app_url' => $u]);
+    return ($https ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+}
+/** Base URL for links: the current request when there is one (so a renamed folder is picked up at once), else the stored value (cron/CLI alerts). */
+function lcup_app_url(): string {
+    $cur = lcup_current_url(); if ($cur !== '') return $cur;
+    $u = rtrim((string)private_get('app_url', ''), '/');
+    if ($u !== '' && preg_match('~/argentx$~', $u)) { $u = preg_replace('~/argentx$~', '/kirimchiqim/argent', $u); private_set(['app_url' => $u]); }   // folder renamed argentx -> kirimchiqim/argent
+    return $u;
+}
+/** Remember how the admin reaches the app, so cron/CLI alerts can contain links (rewritten on every admin page view). */
+function lcup_remember_app_url(): void {
+    $u = lcup_current_url(); if ($u === '') return;
+    if (rtrim((string)private_get('app_url', ''), '/') !== $u) private_set(['app_url' => $u]);
 }
 function lcup_alert_html(array $ev): string {
     $h = function ($s) { return htmlspecialchars((string)$s, ENT_NOQUOTES, 'UTF-8'); };

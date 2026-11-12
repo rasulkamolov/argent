@@ -1,7 +1,7 @@
 <?php defined('ADMIN_PAGE') || exit;
 $mapRows = lcup_map_rows(false); $mapBy = []; foreach ($mapRows as $r) $mapBy[(int)$r['branch_id']] = $r;
 $cfgOk = (string)cfg('LCUP_PHONE', '') !== '' && (string)cfg('LCUP_PASSWORD', '') !== ''; $pd = private_dir();
-$self = lcup_app_url() ?: ((!empty($_SERVER['HTTP_HOST']) ? ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') : 'https://SAYT/argent'));
+$self = lcup_current_url() ?: (lcup_app_url() ?: 'https://SAYT/kirimchiqim/argent');
 $lastOk = lcup_state_get('last_success');
 $v = function ($k) { return e(lcup_setting($k)); };
 ?>

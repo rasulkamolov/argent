@@ -46,7 +46,7 @@ $backups = array_reverse($bk); ?>
 <?php
 [$cfgVals, $cfgInfo] = private_config_read(); $hasPhone = ($cfgVals['LCUP_PHONE'] ?? '') !== ''; $hasPass = ($cfgVals['LCUP_PASSWORD'] ?? '') !== ''; $hasTgT = ($cfgVals['TELEGRAM_BOT_TOKEN'] ?? '') !== ''; $hasTgC = ($cfgVals['TELEGRAM_CHAT_ID'] ?? '') !== '';
 $hasCron = ($cfgVals['CRON_TOKEN'] ?? '') !== ''; $hasWh = ($cfgVals['LCUP_WEBHOOK_SECRET'] ?? '') !== '';
-$appUrl = lcup_app_url() ?: ((!empty($_SERVER['HTTP_HOST']) ? ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') : 'https://SAYT/argent'));
+$appUrl = lcup_current_url() ?: (lcup_app_url() ?: 'https://SAYT/kirimchiqim/argent');
 $cronUrl = $appUrl . '/cron.php?token=' . ($cfgVals['CRON_TOKEN'] ?? '…'); $secret = function ($has) { return $has ? '•••••• saqlangan' : ''; }; ?>
 <section class="card card-pad stack" id="lcCfg" aria-labelledby="lcCfgT">
   <div class="row"><span class="icon-tile primary"><?= icon('radar') ?></span><div class="grow"><h2 class="card-title" id="lcCfgT">LC-UP monitoring</h2><p class="fs-sm text-3">Sozlamalar <code><?= e(private_config_file() ?: private_dir_target() . '/config.php') ?></code> ga yoziladi (public_html dan tashqarida, huquq 600) — bazaga emas</p></div></div>
