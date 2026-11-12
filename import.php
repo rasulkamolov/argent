@@ -3,8 +3,7 @@ require_once __DIR__ . '/layout.php';
 require_once __DIR__ . '/import_lib.php';
 require_admin();
 
-$dir = __DIR__ . '/data/imports';
-if (!is_dir($dir)) @mkdir($dir, 0750, true);
+$dir = data_dir_ready('imports') ?: data_dir('imports');
 foreach (glob($dir . '/imp_*.json') ?: [] as $old) if (filemtime($old) < time() - 7200) @unlink($old);   // stale previews
 function imp_fail(string $msg) { flash_set('error', $msg); header('Location: import.php'); exit; }
 

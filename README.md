@@ -35,6 +35,32 @@ Agar hostingdagi bazani yangi fayl bilan almashtirib yuborgan bo'lsangiz:
 - Fayllar `data/proofs/` da saqlanadi va faqat tizimga kirgan, **o'sha filialga huquqi bor** foydalanuvchiga ko'rsatiladi. Ro'yxatda «Skrinshot/PDF/Fayl» belgisi; yo'qlari «Isbotsiz» deb belgilanadi. Hisobotda «Isbotsiz» filtri va CSV da «Isbot» ustuni bor.
 - `data/` papkasini ham (FTP orqali) zaxiralab turing — `Yuklab olish (.sqlite)` faqat bazani oladi.
 
+## LC-UP monitoring va «Solishtirish» (administrator uchun)
+
+LC-UP dagi to'lovlarni **faqat o'qiydi** (kirish + GET so'rovlari; filial almashtirish faqat siz ruxsat bersangiz) va har bir to'lovga oid o'zgarishni
+o'chirib bo'lmaydigan «LC-UP nazorat» ro'yxatiga yozadi; shubhali (qizil) hodisalar Telegram'ga yuboriladi.
+
+**O'rnatish (qadam-baqadam)**
+1. Fayllarni yuklang (`harvards_finance.sqlite` ni mavjud bazaning ustiga YOZMANG).
+2. `public_html` bilan **yonma-yon** `argent_private` papkasini yarating
+   (`/home/uXXXX/domains/oxfordlc.uz/argent_private`). `argent_private.example/config.php` ni shu yerga nusxalang va to'ldiring:
+   `LCUP_PHONE`, `LCUP_PASSWORD`, `CRON_TOKEN` (`openssl rand -hex 24`), kerak bo'lsa `LCUP_WEBHOOK_SECRET`.
+3. Admin → **LC-UP** → «Xavfsizlik» → **Bazani xavfsiz joyga ko'chirish** (baza va `data/` public_html dan tashqariga o'tadi).
+4. LC-UP da monitoring uchun **alohida xodim akkaunti** oching (filial tanlash xodim yozuvida saqlansa, sizning ish sessiyangiz almashib ketmasligi uchun).
+5. Admin → LC-UP → «Filiallarni moslash»: Oxford LC = `414`; ikkinchi filial ID si bo'sh qolsa nom bo'yicha topiladi.
+   LC-UP dagi filial tanlagich faqat so'rov (POST) bilan ishlaydi, shuning uchun «Filialni almashtirishga ruxsat» ni yoqing (yoki har filial uchun alohida akkaunt).
+6. **Ulanishni tekshirish**; muammo bo'lsa **Diagnostika** → ZIP ni yuboring.
+7. Telegram: @BotFather → `/newbot` → token. Botga biror xabar yozing, so'ng brauzerda
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` → `chat":{"id":…}`. Token va chat ID ni Admin → LC-UP → Telegram ga kiriting («sinov xabari»).
+8. Cron (har daqiqa): Hostinger → Advanced → Cron Jobs → `* * * * *` →
+   `/usr/bin/php /home/uXXXX/domains/oxfordlc.uz/public_html/argent/cron.php`
+   (yoki cron-job.org: `https://oxfordlc.uz/argent/cron.php?token=CRON_TOKEN`, xato bo'lsa u sizga e-mail yuboradi).
+9. Webhook (ixtiyoriy): `https://oxfordlc.uz/argent/webhook.php` (POST, `X-LC-UP-Signature` = HMAC-SHA256).
+
+**Qanday ishlaydi**: har daqiqada «Xodimlar faoliyati» (yaratilgan to'lov va ASL summa), o'chirilganlar arxivi va `/admin/tolovlars`
+ning yangi sahifalari o'qiladi; oxirgi 40 kun aylanma sahifalar orqali, **tunda (03:00 dan)** barcha to'lovlar va butun arxiv bo'laklab tekshiriladi.
+Yaratilganda LC-UP jurnalidagi summa hozirgi summa bilan solishtiriladi — farq bo'lsa «To'lov summasi o'zgartirilgan» (asl → hozirgi).
+
 ## Zaxira
 - Admin kirganda har kuni **avtomatik** zaxira nusxa olinadi (`data/backups/`, oxirgi 30 ta).
 - Har bir filial kartasida ⬇ tugmasi: faqat shu filial ma'lumotini alohida `.sqlite` fayl qilib yuklab oladi.

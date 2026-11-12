@@ -22,15 +22,9 @@ function db(): PDO { global $conn; return $conn; }
 
 /* ------------------------------------------------------------------ session */
 function app_session_start(): void {
-    if (session_status() === PHP_SESSION_ACTIVE || PHP_SAPI === 'cli') return;
-    $dir = __DIR__ . '/data';
-    if (!is_dir($dir)) @mkdir($dir, 0750, true);
-    if (is_dir($dir) && is_writable($dir)) {
-        if (!is_file($dir . '/.htaccess')) @file_put_contents($dir . '/.htaccess', "Require all denied\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n");
-        $sp = $dir . '/sessions';
-        if (!is_dir($sp)) @mkdir($sp, 0750, true);
-        if (is_dir($sp) && is_writable($sp)) session_save_path($sp);
-    }
+    if (session_status() === PHP_SESSION_ACTIVE || PHP_SAPI === 'cli' || defined('ARGENT_NO_SESSION')) return;
+    $sp = data_dir_ready('sessions');
+    if ($sp) session_save_path($sp);
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
     $path = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
     ini_set('session.gc_maxlifetime', '604800');
@@ -287,9 +281,7 @@ function branch_balances(int $branch = 0, ?string $upTo = null, ?string $before 
 
 /* ------------------------------------------------------------------ backups */
 function backup_dir(): ?string {
-    $d = __DIR__ . '/data/backups';
-    if (!is_dir($d)) @mkdir($d, 0750, true);
-    return (is_dir($d) && is_writable($d)) ? $d : null;
+    return data_dir_ready('backups');
 }
 /** Consistent copy of the database. Returns the file path or null. */
 function db_backup(string $label = 'manual'): ?string {

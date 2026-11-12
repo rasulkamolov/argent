@@ -25,15 +25,12 @@ function proof_types(): array {
 const PROOF_ALLOWED_LABEL = 'rasm (JPG, PNG, WEBP), PDF, Word, Excel, TXT/CSV';
 
 function proof_dir(): ?string {
-    $d = __DIR__ . '/data/proofs';
-    if (!is_dir($d)) @mkdir($d, 0750, true);
-    if (is_dir($d) && !is_file(__DIR__ . '/data/.htaccess')) @file_put_contents(__DIR__ . '/data/.htaccess', "Require all denied\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n");
-    return (is_dir($d) && is_writable($d)) ? $d : null;
+    return data_dir_ready('proofs');
 }
 /** Absolute path of a stored proof (guards against path tricks), or null. */
 function proof_abs(?string $rel): ?string {
     if (!$rel || !preg_match('~^\d{4}/\d{2}/[A-Za-z0-9_]+\.([a-z0-9]{2,4})$~', $rel, $m) || !isset(proof_types()[$m[1]])) return null;
-    $f = __DIR__ . '/data/proofs/' . $rel;
+    $f = data_dir('proofs') . '/' . $rel;
     return is_file($f) ? $f : null;
 }
 /** ['kind' => image|pdf|file, 'mime' => ..., 'inline' => bool, 'ext' => ...] for a stored proof path. */
@@ -143,8 +140,21 @@ function web_exposure_check(): ?array {
     $base = ($https ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
     $ctx = stream_context_create(['http' => ['method' => 'HEAD', 'timeout' => 3, 'ignore_errors' => true, 'follow_location' => 0], 'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
     $exposed = []; $answered = 0;
-    foreach (['harvards_finance.sqlite' => 'Ma\'lumotlar bazasi (harvards_finance.sqlite)', 'data/.htaccess' => 'data/ papkasi (isbot fayllari, zaxira nusxalar)'] as $path => $label) {
-        $h = @get_headers($base . $path, 0, $ctx);
+    // What to probe depends on where things live now (a moved database / data folder is no longer under the web root).
+    $probe = [];
+    if (!db_is_private()) $probe[basename(DB_FILE)] = "Ma'lumotlar bazasi (" . basename(DB_FILE) . ")";
+    if (!path_inside_webroot(data_root())) { /* data/ already moved */ } else $probe['data/.htaccess'] = "data/ papkasi (isbot fayllari, zaxira nusxalar)";
+    $pd = private_dir();
+    $origin = ($https ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'];
+    $abs = [];                                           // probes that need a URL relative to the site root, not to this folder
+    if ($pd && path_inside_webroot($pd) && !empty($_SERVER['DOCUMENT_ROOT']) && ($dr = realpath($_SERVER['DOCUMENT_ROOT'])) && ($pr = realpath($pd)) && strpos($pr, $dr) === 0) {
+        $rel = str_replace('\\', '/', substr($pr, strlen($dr)));
+        $abs[$origin . $rel . '/config.php'] = "Maxfiy sozlamalar (" . basename($pd) . "/config.php)";
+        $abs[$origin . $rel . '/settings.json'] = "Telegram sozlamalari (" . basename($pd) . "/settings.json)";
+    }
+    foreach ($probe as $path => $label) $abs[$base . $path] = $label;
+    foreach ($abs as $url => $label) {
+        $h = @get_headers($url, 0, $ctx);
         if (!$h || !preg_match('~HTTP/\S+\s+(\d{3})~', $h[0], $mm)) continue;
         $answered++;
         if ((int)$mm[1] === 200) $exposed[] = $label;

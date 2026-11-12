@@ -352,6 +352,55 @@ if (is_admin()) {
         done($A . '#categories', "Kategoriya o'chirildi");
     }
 
+    /* ---- LC-UP monitoring ---- */
+    if ($action === 'lcup_review') {
+        $ids = array_filter(array_map('intval', explode(',', pstr('ids')))); $n = 0; require_once __DIR__ . '/lcup_lib.php';
+        foreach (array_slice($ids, 0, 100) as $id) if (lcup_review($id, $meId, pstr('note'))) $n++;
+        audit('lcup.review', 'lcup', null, ['count' => $n]);
+        done(safe_back(pstr('back'), 'lcup.php'), $n ? "$n ta hodisa «ko'rildi» deb belgilandi" : "Belgilanadigan hodisa topilmadi (allaqachon ko'rilgan)", $n ? 'ok' : 'error');
+    }
+    if ($action === 'lcup_save_settings') {
+        require_once __DIR__ . '/lcup_lib.php'; $num = function ($k, $min, $max) { return (string)max($min, min($max, (int)preg_replace('/\D+/', '', pstr($k)))); };
+        $tm = function ($k, $d) { return preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', pstr($k)) ? pstr($k) : $d; };
+        foreach (['small_amount' => $num('small_amount', 0, 100000000), 'late_minutes' => $num('late_minutes', 1, 10080), 'hot_pages' => $num('hot_pages', 1, 20), 'warm_pages' => $num('warm_pages', 0, 20), 'delay_ms' => $num('delay_ms', 0, 5000), 'night_pages_per_run' => $num('night_pages_per_run', 1, 200),
+                 'work_from' => $tm('work_from', '08:00'), 'work_to' => $tm('work_to', '21:00'), 'eod_time' => $tm('eod_time', '21:30'), 'night_time' => $tm('night_time', '03:00'),
+                 'allow_switch_post' => !empty($_POST['allow_switch_post']) ? '1' : '0', 'alerts_on' => !empty($_POST['alerts_on']) ? '1' : '0'] as $k => $val) setting_set('lcup.' . $k, $val);
+        foreach (['worker_url', 'archive_url', 'payments_url', 'discount_url', 'debtors_url'] as $k) { $u = pstr($k); if ($u === '' || preg_match('~^/[A-Za-z0-9_\-/.]*$~', $u)) setting_set('lcup.' . $k, $u); }
+        audit('lcup.settings', 'lcup', null, ['allow_switch_post' => !empty($_POST['allow_switch_post'])]);
+        done($A . '#lcup', "LC-UP sozlamalari saqlandi");
+    }
+    if ($action === 'lcup_save_map') {
+        $keys = (array)($_POST['key'] ?? []); $names = (array)($_POST['name'] ?? []); $on = (array)($_POST['on'] ?? []);
+        foreach (branches_all() as $b) {
+            $id = (int)$b['id']; $k = preg_replace('/[^0-9A-Za-z_-]/', '', (string)($keys[$id] ?? '')); $nm = mb_substr(trim((string)($names[$id] ?? '')), 0, 80); $act = isset($on[$id]) ? 1 : 0;
+            if ($k === '' && $nm === '') { db()->prepare("DELETE FROM lcup_branch_map WHERE branch_id = ?")->execute([$id]); continue; }
+            db()->prepare("INSERT INTO lcup_branch_map (branch_id, lcup_key, lcup_name, is_active) VALUES (?,?,?,?) ON CONFLICT(branch_id) DO UPDATE SET lcup_key = excluded.lcup_key, lcup_name = excluded.lcup_name, is_active = excluded.is_active")->execute([$id, $k, $nm, $act]);
+        }
+        audit('lcup.map', 'lcup'); done($A . '#lcup', "Filial moslash saqlandi");
+    }
+    if ($action === 'lcup_save_telegram') {
+        require_once __DIR__ . '/lcup_lib.php'; $tok = pstr('token'); $chat = preg_replace('/[^0-9\-@A-Za-z_]/', '', pstr('chat'));
+        $kv = ['telegram_chat' => $chat !== '' ? $chat : null]; if ($tok !== '') $kv['telegram_token'] = preg_match('/^[0-9]{5,}:[A-Za-z0-9_\-]{20,}$/', $tok) ? $tok : false;
+        if (($kv['telegram_token'] ?? null) === false) done($A . '#lcup', "Bot token formati noto'g'ri (123456:ABC…)", 'error');
+        if (!private_set($kv)) done($A . '#lcup', "Maxfiy papkaga yozib bo'lmadi (" . private_dir_target() . "). Papkani yarating va yozish huquqini bering.", 'error');
+        lcup_state_set('alerts_since', lcup_now()); audit('lcup.telegram', 'lcup');
+        if (!empty($_POST['test'])) { $err = null; $ok = lcup_tg_send("✅ <b>Argent: Telegram ulandi</b>\nLC-UP ogohlantirishlari shu yerga keladi.", $err); done($A . '#lcup', $ok ? "Sinov xabari yuborildi" : "Telegram xatosi: $err", $ok ? 'ok' : 'error'); }
+        done($A . '#lcup', "Telegram sozlamalari saqlandi");
+    }
+    if ($action === 'lcup_selftest' || $action === 'lcup_run_now' || $action === 'lcup_diagnostics') {
+        require_once __DIR__ . '/lcup_diag.php'; @set_time_limit(150); session_write_close();
+        if ($action === 'lcup_selftest') { $r = lcup_selftest(); app_session_start(); $_SESSION['lcup_selftest'] = $r; audit('lcup.selftest', 'lcup'); done($A . '#lcup'); }
+        if ($action === 'lcup_run_now') { $r = lcup_run(['trigger' => 'manual']); app_session_start(); audit('lcup.run', 'lcup', null, ['ok' => $r['ok']]);
+            done($A . '#lcup', !empty($r['busy']) ? "Boshqa sinxronizatsiya ishlayapti" : ($r['ok'] ? "Sinxronizatsiya tayyor: {$r['requests']} so'rov, {$r['new_events']} yangi hodisa" : "Xato: " . implode(' | ', $r['errors'])), !empty($r['busy']) || $r['ok'] ? 'ok' : 'error'); }
+        $d = lcup_diagnostics(); app_session_start(); audit('lcup.diagnostics', 'lcup', null, ['files' => count($d['files'])]);
+        done($d['dir'] ? 'lcup.php?diag=' . $d['dir'] . '#diag' : $A . '#lcup', $d['dir'] ? 'Diagnostika tayyor' : implode(' ', $d['lines']), $d['dir'] ? 'ok' : 'error');
+    }
+    if ($action === 'move_to_private') {
+        $bk = db_backup('before_move'); [$ok, $msg] = security_move_to_private();
+        if (session_status() === PHP_SESSION_ACTIVE) { flash_set($ok ? 'ok' : 'error', $msg); }
+        header('Location: ' . $A . '#lcup'); exit();
+    }
+
     /* ---- settings, backup, sample data ---- */
     if ($action === 'update_setting') {
         $key = pstr('key');

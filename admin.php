@@ -2,7 +2,10 @@
 require_once __DIR__ . '/layout.php';
 require_once __DIR__ . '/report_lib.php';
 require_once __DIR__ . '/proofs.php';
+require_once __DIR__ . '/lcup_lib.php';
 require_admin();
+lcup_remember_app_url();
+lcup_stale_check();
 define('ADMIN_PAGE', 1);
 
 $today = date('Y-m-d'); $month_start = date('Y-m-01'); $month_end = date('Y-m-t');
@@ -45,11 +48,14 @@ $ap = db()->prepare("SELECT password FROM users WHERE id = ?"); $ap->execute([au
 if (pw_verify('admin0007', (string)$ap->fetchColumn())) $alerts[] = ['danger', "Admin paroli hali standart (admin0007). Xavfsizlik uchun hoziroq almashtiring.", 'profile.php', "Parolni o'zgartirish"];
 foreach ($B as $b) { if ($b['is_active'] && empty($ov[$b['id']]['cashiers']) && empty($ov[$b['id']]['managers'])) $alerts[] = ['warn', "«" . $b['name'] . "» filialiga kassir biriktirilmagan.", '#users', "Kassir qo'shish"]; }
 foreach ($B as $b) { if ($b['is_active'] && empty($ov[$b['id']]['tracked'])) { $alerts[] = ['warn', "«" . $b['name'] . "» filialida kassa qoldig'i sozlanmagan: kassadagi pul va «Kassani sanash» ishlamaydi.", '#branches', "Sozlash"]; } }
+if (!db_is_private()) $alerts[] = ['warn', "Baza fayli public_html ichida turibdi. Uni xavfsiz joyga ko'chiring (faqat .htaccess himoya qilyapti).", 'admin.php#lcup', "Ko'chirish"];
+if (lcup_unread_count() > 0) $alerts[] = ['danger', lcup_unread_count() . " ta ko'rilmagan LC-UP ogohlantirish (qizil hodisa).", 'lcup.php?status=unread', "Ko'rish"];
+$lcMin = lcup_minutes_since_run(); if ($lcMin !== null && $lcMin >= 10) $alerts[] = ['danger', "LC-UP sinxronizatsiya $lcMin daqiqadan beri ishlamayapti.", 'admin.php#lcup', "Tekshirish"];
 $expo = web_exposure_check();
 if (!empty($expo)) $alerts[] = ['danger', "XAVFLI: internetdan ochiq yuklab olish mumkin: " . implode('; ', $expo) . ". Hostingda .htaccess fayli ishlayotganini tekshiring (yoki faylni public_html dan tashqariga ko'chiring).", 'admin.php#settings', "Batafsil"];
 $np30 = db()->prepare("SELECT COUNT(*) FROM transactions t WHERE t.cash_in = 1 AND " . proof_missing_sql('t') . " AND t.date >= ?"); $np30->execute([date('Y-m-d', strtotime('-30 days'))]); $np30 = (int)$np30->fetchColumn();
 if ($np30 > 0) $alerts[] = ['warn', "Oxirgi 30 kunda $np30 ta Click/Bank kirim uchun to'lov isboti yo'q.", 'hisobot.php?proof=missing&branch=0&start=' . date('Y-m-d', strtotime('-30 days')) . '&end=' . date('Y-m-d'), "Ko'rish"];
-$bk = glob(__DIR__ . '/data/backups/backup_*.sqlite') ?: []; sort($bk);
+$bk = glob(data_dir('backups') . '/backup_*.sqlite') ?: []; sort($bk);
 $lastBk = $bk ? filemtime(end($bk)) : 0;
 if (!$lastBk || $lastBk < strtotime('-7 days')) $alerts[] = ['warn', $lastBk ? "Oxirgi zaxira nusxa " . floor((time() - $lastBk) / 86400) . " kun oldin olingan." : "Hali zaxira nusxa olinmagan.", '#settings', "Zaxira olish"];
 
@@ -76,6 +82,7 @@ ui_start('admin');
       <button class="tab" role="tab" data-tab="employees" id="t-employees" aria-controls="p-employees"><?= icon('briefcase', 'i-sm') ?> Xodimlar <span class="tab-count"><?= count($employees) ?></span></button>
       <button class="tab" role="tab" data-tab="categories" id="t-categories" aria-controls="p-categories"><?= icon('tags', 'i-sm') ?> Kategoriyalar <span class="tab-count"><?= count($categories) ?></span></button>
       <button class="tab" role="tab" data-tab="journal" id="t-journal" aria-controls="p-journal"><?= icon('history', 'i-sm') ?> Jurnal <span class="tab-count"><?= fmt($jtotal) ?></span></button>
+      <button class="tab" role="tab" data-tab="lcup" id="t-lcup" aria-controls="p-lcup"><?= icon('radar', 'i-sm') ?> LC-UP<?= lcup_unread_count() ? ' <span class="tab-count">' . lcup_unread_count() . '</span>' : '' ?></button>
       <button class="tab" role="tab" data-tab="settings" id="t-settings" aria-controls="p-settings"><?= icon('settings', 'i-sm') ?> Sozlamalar</button>
     </div>
 
@@ -85,6 +92,7 @@ ui_start('admin');
     <div class="tabpanel stack" role="tabpanel" id="p-employees" aria-labelledby="t-employees" hidden><?php include __DIR__ . '/admin_parts/employees.php'; ?></div>
     <div class="tabpanel stack" role="tabpanel" id="p-categories" aria-labelledby="t-categories" hidden><?php include __DIR__ . '/admin_parts/categories.php'; ?></div>
     <div class="tabpanel stack" role="tabpanel" id="p-journal" aria-labelledby="t-journal" hidden><?php include __DIR__ . '/admin_parts/journal.php'; ?></div>
+    <div class="tabpanel stack" role="tabpanel" id="p-lcup" aria-labelledby="t-lcup" hidden><?php include __DIR__ . '/admin_parts/lcup.php'; ?></div>
     <div class="tabpanel stack" role="tabpanel" id="p-settings" aria-labelledby="t-settings" hidden><?php include __DIR__ . '/admin_parts/settings.php'; ?></div>
   </div>
 </div>

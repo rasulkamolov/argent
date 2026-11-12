@@ -132,6 +132,8 @@ function ui_nav_items(): array {
         ['reports', 'hisobot.php', 'Hisobot', 'file-text', 'Hisobotlar', true, ['analytics', 'cashbook']],
         ['analytics', 'analitika.php', 'Analitika', 'chart-line', 'Analitika', false, []],
         ['cashbook', 'kassa.php', 'Kassa', 'wallet', 'Kassa kitobi', false, []],
+        ['lcup', 'lcup.php', 'LC-UP', 'radar', 'LC-UP nazorat', true, ['recon']],
+        ['recon', 'solishtirish.php', 'Solishtirish', 'scale', 'LC-UP solishtirish', false, []],
         ['admin', 'admin.php', 'Admin', 'settings', 'Admin panel', true, []],
     ];
     if ($role === 'manager') return [
@@ -182,6 +184,21 @@ function ui_scope_switcher(string $variant): string {
     return $admin ? '<button type="button" class="switcher" data-open="#branchDialog">' . $inner . '</button>' : '<div class="switcher">' . $inner . '</div>';
 }
 
+/** Number of unread red LC-UP events (administrator only; 0 for everybody else). */
+function ui_unread(): int {
+    if (!is_admin()) return 0;
+    if (!function_exists('lcup_unread_count')) { require_once __DIR__ . '/lcup_lib.php'; }
+    return lcup_unread_count();
+}
+/** Sub navigation of the LC-UP section. */
+function ui_lcup_subnav(string $active): void {
+    ?><div class="subnav no-print" role="navigation" aria-label="LC-UP bo'limlari">
+  <a href="lcup.php" <?= $active === 'lcup' ? 'aria-current="page"' : '' ?>><?= icon('radar', 'i-sm') ?> Nazorat</a>
+  <a href="solishtirish.php" <?= $active === 'recon' ? 'aria-current="page"' : '' ?>><?= icon('scale', 'i-sm') ?> Solishtirish</a>
+</div>
+<?php
+}
+
 /** Opens <body>, sidebar (desktop), topbar (mobile) and <main>. */
 function ui_start(string $active, array $o = []): void {
     $u = auth_user();
@@ -192,10 +209,11 @@ function ui_start(string $active, array $o = []): void {
   <aside class="sidebar no-print" aria-label="Asosiy navigatsiya">
     <?= ui_brand() ?>
     <?= ui_scope_switcher('card') ?>
+    <?php if (is_admin() && ui_unread() > 0): ?><a class="side-alert" href="lcup.php?status=unread"><?= icon('siren', 'i-sm') ?><span><b><?= ui_unread() ?></b> ta ko'rilmagan LC-UP ogohlantirish</span></a><?php endif; ?>
     <nav class="nav" aria-label="Bo'limlar">
       <div class="eyebrow nav-label">Bo'limlar</div>
       <?php foreach ($items as [$key, $href, $short, $ic, $long]): ?>
-        <a href="<?= e($href) ?>" <?= $key === $active ? 'aria-current="page"' : '' ?>><?= icon($ic) ?> <?= e($long) ?></a>
+        <a href="<?= e($href) ?>" <?= ($key === $active || ($key === 'lcup' && $active === 'recon')) ? 'aria-current="page"' : '' ?>><?= icon($ic) ?> <?= e($long) ?><?= ($key === 'lcup' && ui_unread() > 0) ? '<span class="nav-badge" aria-label="Ko\'rilmagan ogohlantirishlar">' . ui_unread() . '</span>' : '' ?></a>
       <?php endforeach; ?>
     </nav>
     <div class="side-foot">
@@ -212,6 +230,7 @@ function ui_start(string $active, array $o = []): void {
     <header class="topbar no-print">
       <a class="brand-mark" href="index.php" aria-label="Bosh sahifa"><img src="assets/logo-64.png" alt="" width="30" height="30"></a>
       <?= ui_scope_switcher('pill') ?>
+      <?php if (is_admin()): ?><a class="btn btn-ghost btn-icon bell" href="lcup.php<?= ui_unread() > 0 ? '?status=unread' : '' ?>" aria-label="LC-UP ogohlantirishlari"><?= icon('bell') ?><?= ui_unread() > 0 ? '<span class="bell-badge">' . min(99, ui_unread()) . '</span>' : '' ?></a><?php endif; ?>
       <a class="btn btn-ghost btn-icon" href="process.php?action=logout" data-post aria-label="Chiqish"><?= icon('log-out') ?></a>
     </header>
     <main class="main" id="main">
@@ -227,7 +246,7 @@ function ui_end(array $o = []): void {
 </div>
 <nav class="bnav no-print" aria-label="Pastki navigatsiya">
   <?php foreach ($items as [$key, $href, $short, $ic, $long, $b, $also]): ?>
-    <a href="<?= e($href) ?>" <?= ($key === $active || in_array($active, $also, true)) ? 'aria-current="page"' : '' ?>><?= icon($ic) ?><span><?= e($short) ?></span></a>
+    <a href="<?= e($href) ?>" <?= ($key === $active || in_array($active, $also, true)) ? 'aria-current="page"' : '' ?>><?= icon($ic) ?><span><?= e($short) ?></span><?= ($key === 'lcup' && ui_unread() > 0) ? '<i class="bn-dot">' . min(99, ui_unread()) . '</i>' : '' ?></a>
   <?php endforeach; ?>
 </nav>
 <?= $o['after'] ?? '' ?>

@@ -12,8 +12,19 @@ Options -Indexes
     </IfModule>
 </FilesMatch>
 
+# Secrets must never be served even if someone puts them next to the app by mistake
+<FilesMatch "^(config\.php|settings\.json|lcup_cookies\.txt|\.env)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
 # Include-only PHP files (no direct access)
-<FilesMatch "^(db|auth|compat|layout|report_lib|import_lib|proofs)\.php$">
+<FilesMatch "^(db|auth|compat|layout|report_lib|import_lib|proofs|paths|lcup_[a-z_]+)\.php$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
