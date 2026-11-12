@@ -388,3 +388,54 @@ function lcup_current_branch(string $html, array $keys, array $names): ?string {
     $s = lcup_find_branch_select($html, $keys, $names);
     return $s['current'] ?? null;
 }
+
+
+/* ------------------------------------------------------------------ student page: "Tarix" rows */
+/**
+ * Rows of a student's "Tarix" (history) tab: event text | group | amount (new value; negative for a minus payment) | staff | date-time.
+ * The markup has not been seen yet, so two strategies are tried: a table with recognisable headers, and "row-like" elements whose
+ * visible pieces come in the order event, group, amount, staff, date-time.
+ * @return array ['structure' => bool, 'strategy' => string, 'rows' => [['text','group','amount','staff','at','raw']]]
+ */
+function lcup_parse_student_history(string $html): array {
+    $d = lc_dom($html); $xp = new DOMXPath($d); $rows = []; $strategy = 'none';
+    $al = ['event' => ['HODISA', 'AMAL', 'HARAKAT', 'MATN', 'TAVSIF', 'VOQEA', 'TURI'], 'group' => ['GURUH'], 'amount' => ['SUMMA', 'NARX', 'MIQDOR', 'QIYMAT'], 'staff' => ['HODIM', 'XODIM', 'KIM', 'KIMTOMONIDAN', 'FOYDALANUVCHI'], 'time' => ['SANA', 'VAQT', 'SANAVAQT', 'YARATILGAN', 'KIRITILGAN']];
+    if (($pick = lc_pick_table($d, $al, ['event', 'time']))) {
+        [$t, $map] = $pick; $strategy = 'table';
+        foreach ($t['rows'] as $r) { $ev = lc_cell($r, $map, 'event'); $at = lc_dt(lc_cell($r, $map, 'time')); if ($ev === '' || !$at) continue;
+            $rows[] = ['text' => $ev, 'group' => lc_cell($r, $map, 'group') ?: null, 'amount' => isset($map['amount']) ? lc_money(lc_cell($r, $map, 'amount')) : null, 'staff' => lc_cell($r, $map, 'staff') ?: null, 'at' => $at, 'raw' => implode(' | ', $r['texts'])]; }
+    }
+    if (!$rows) {
+        $verbs = "/(to'?lov|talaba|guruh|chegirma|qarz|pul)[^|]{0,60}(tahrirlandi|yaratildi|o'chirildi|qo'shildi|o'zgartirildi)/iu"; $cands = []; $anc = new SplObjectStorage();
+        foreach ($xp->query('//li|//tr|//div|//article|//p') as $n) {
+            $tx = lc_text($n); $len = mb_strlen($tx); if ($len < 15 || $len > 700) continue;
+            if (!preg_match('/\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}/', $tx) || !preg_match($verbs, lc_apos($tx))) continue;
+            $cands[] = $n;
+        }
+        foreach ($cands as $n) for ($pn = $n->parentNode; $pn; $pn = $pn->parentNode) $anc->attach($pn);
+        foreach ($cands as $n) {
+            if ($anc->contains($n)) continue;
+            $pieces = [];
+            $leaf = function (DOMNode $x) use (&$leaf, &$pieces) { $kids = false; foreach ($x->childNodes as $c) if ($c instanceof DOMElement) { $kids = true; $leaf($c); } if (!$kids) { $t = lc_text($x); if ($t !== '') $pieces[] = $t; } };
+            $leaf($n);
+            if (count($pieces) < 3) $pieces = array_values(array_filter(array_map('lc_clean', preg_split('/\s*[|·•]\s*/u', lc_text($n)))));
+            $ev = $at = null; $amt = null; $before = []; $after = []; $seenAmt = false; $amtIdx = null;
+            foreach ($pieces as $i => $pc) {
+                $pa = lc_apos($pc);
+                if ($at === null && preg_match('/^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(:\d{2})?$/', $pa)) { $at = lc_dt($pa); continue; }
+                if ($ev === null && preg_match($verbs, $pa)) { $ev = $pc; continue; }
+                if ($amt === null && preg_match('/^[−\-–+]?\s*\d[\d\s.,]*\s*(so\'?m|sum|uzs)?$/iu', $pa)) { $amt = lc_money($pa); $seenAmt = true; continue; }
+                if ($seenAmt) $after[] = $pc; else $before[] = $pc;
+            }
+            if ($ev === null || $at === null) { if (preg_match('/(\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(:\d{2})?)/', lc_text($n), $mm)) $at = $at ?: lc_dt($mm[1]); if ($ev === null || $at === null) continue; }
+            $rows[] = ['text' => $ev, 'group' => $before ? end($before) : null, 'amount' => $amt, 'staff' => $after ? $after[0] : null, 'at' => $at, 'raw' => lc_text($n)];
+        }
+        if ($rows) $strategy = 'pieces';
+    }
+    $pane = $xp->query('//*[@id="history"]')->item(0); $paneText = $pane ? lc_text($pane) : '';
+    return ['structure' => (bool)$rows || ($pane && mb_strlen($paneText) > 20), 'strategy' => $strategy, 'rows' => $rows];
+}
+/** Is this history row a "minus payment edited" row, and its new (negative) amount known? */
+function lcup_history_is_minus_edit(array $r): bool {
+    return (bool)preg_match("/to'?lov\s+tahrirlandi/iu", lc_apos((string)$r['text'])) && $r['amount'] !== null && (float)$r['amount'] < 0;
+}

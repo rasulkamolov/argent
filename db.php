@@ -12,7 +12,7 @@ if (!defined('DB_FILE')) {
     define('DB_FILE', db_resolve_file());
 }
 if (!defined('DEFAULT_BRANCH_NAME')) define('DEFAULT_BRANCH_NAME', "OXFORD Bo'zqal'a");
-const DB_SCHEMA_VERSION = 7;   // v2: multi-branch, v3: branches.balance_ok, v4: transactions.proof, v5: transactions.proof_name, v6: LC-UP monitoring, v7: LC-UP whitelist log, charges, gaps
+const DB_SCHEMA_VERSION = 8;   // v2: multi-branch, v3: balance_ok, v4/v5: proof, v6: LC-UP monitoring, v7: whitelist log, charges, gaps, v8: student history (minus-payment edits)
 
 function db_has_column(PDO $c, string $table, string $col): bool {
     foreach ($c->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -239,6 +239,16 @@ function db_migrate(PDO $c): void {
             id INTEGER PRIMARY KEY AUTOINCREMENT, from_at TEXT NOT NULL, to_at TEXT NOT NULL, filled INTEGER DEFAULT 0, note TEXT
         )");
         db_add_column($c, 'lcup_debts', 'group_name', "TEXT DEFAULT ''");
+
+        /* ---- v8: student "Tarix" rows (who edited which charge, when) used to identify "minus to'lov tahrirlandi" log rows ---- */
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_history (
+            branch_id INTEGER NOT NULL, student_id TEXT NOT NULL, hkey TEXT NOT NULL,
+            text TEXT, group_name TEXT, amount REAL, staff TEXT, at TEXT, first_seen TEXT,
+            PRIMARY KEY (branch_id, student_id, hkey)
+        )");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lchist_at ON lcup_history(branch_id, at)");
+        db_add_column($c, 'lcup_student_ids', 'last_hist_check', 'TEXT');
+        db_add_column($c, 'lcup_history', 'act_id', 'TEXT');       // the log row this history row was matched to (one history row identifies one log row)
 
         // suggested mapping (editable in Admin → LC-UP): Oxford LC (414) = Yangibozor Markaz, Oxford Bo'zqal'a = OXFORD Bo'zqal'a
         if ((int)$c->query("SELECT COUNT(*) FROM lcup_branch_map")->fetchColumn() === 0) {

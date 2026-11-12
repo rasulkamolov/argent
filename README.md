@@ -52,8 +52,14 @@ Qizil (🔴) hodisalar darhol Telegram'ga ketadi; sariq (🟡) hodisalar kunlik 
 7. Cron (har daqiqa): Hostinger → Cron Jobs → `/usr/bin/php /home/uXXXX/domains/oxfordlc.uz/public_html/argent/cron.php`, yoki cron-job.org: Sozlamalardagi «Cron havolasi» (nusxa tugmasi bor).
 
 **Faqat-o'qish va oq ro'yxat**: monitoring faqat GET so'rovlarini va `lcup_policy.php` dagi ro'yxatni yuboradi: login; filial tanlagich (`filial_id`, `renderFilials`, `change_filial`);
-`openHistory`, `setPreset`, `setCat`, `loadMore`, `$refresh` (xodimlar faoliyati) va o'quvchi «To'lovlar» tabi (`studentTolovlarOchilsin`). Saqlash/tahrirlash/o'chirish va to'lovni tiklash (`refresh`) kodda taqiqlangan;
-har so'rov (va rad etilgani) `lcup_reqlog` ga yoziladi (Admin → LC-UP da ko'rinadi).
+`openHistory`, `setPreset`, `setCat`, `loadMore`, `$refresh` (xodimlar faoliyati); o'quvchi «To'lovlar» tabi (`studentTolovlarOchilsin`; `edit/delete/sms/...` nomli komponentlarga hech qachon yuborilmaydi);
+va o'quvchi «Tarix» tabi: **faqat** `students.history-livewire` komponenti, **faqat** yuklash/ko'rsatish (`studentHistoryOchilsin`, `$refresh`, `render`, `init`, `load`, `loadMore`).
+Boshqa usul nomi so'ralsa yuborilmaydi va jurnalga REFUSED deb yoziladi; `students.edit-livewire`, to'lov qo'shish/tahrirlash/o'chirish va to'lovni tiklash (`refresh`) kodda taqiqlangan.
+Har so'rov (va rad etilgani/o'tkazib yuborilgani) `lcup_reqlog` ga yoziladi (Admin → LC-UP da ko'rinadi). «Tarix» uchun Livewire Admin → LC-UP da bitta tugma bilan o'chiriladi.
+
+**«Minus to'lov tahrirlandi» → talaba**: jurnalda talaba ham, summa ham yo'q, shuning uchun talaba sahifasining «Tarix» qatorlari (guruh, YANGI summa, xodim, vaqt) o'qiladi. Nomzodlar: qarzi o'zgargan talabalar, shu xodim ±15 daqiqa ishlagan talabalar, shu vaqtda to'lovi yaratilgan/o'zgargan talabalar (vaqtga eng yaqini birinchi).
+Xodim va vaqt (±1 daqiqa) mos kelsa, yozuv talabaga biriktiriladi va «eski → yangi» ko'rsatiladi (eski summa saqlangan manfiy yozuvlar snapshotidan). Topilmasa «aniqlanmoqda»: har ishga tushishda yana 20 faol talaba (avval qarzdorlar) tekshiriladi; tunda barcha talabalar tarixi saqlanadi.
+Summa moduli kamaysa 🔴 «Oylik to'lov kamaytirildi», oshsa 🟡; 24 soat aniqlanmasa 🔴 «Minus to'lov tahriri aniqlanmadi». Topilganda Telegram'ga yangilangan xabar ketadi. Bitta tarix qatori faqat bitta jurnal yozuviga biriktiriladi.
 
 **Darajalar**: 🔴 to'lov o'chirilishi, summa kamayishi/0 ga tushishi, qarzning to'lovsiz kamayishi, yangi/o'zgargan/o'chirilgan chegirma, oylik to'lov summasi o'zgarishi, 21:00 da Argent'ga kiritilmagan naqd, sinxronizatsiya to'xtashi, sozlamalar o'zgarishi.
 🟡 summa oshishi, sana/usul/guruh o'zgarishi, yaratilgandan 10 daqiqa ichidagi tuzatish, muzlatishda 0 dan farqli summa. Uzilishdan keyin 7 kunlik jurnal avtomatik to'ldiriladi va uzilish davri belgilanadi.

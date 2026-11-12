@@ -13,6 +13,7 @@
  */
 require_once __DIR__ . '/lcup_client.php';
 require_once __DIR__ . '/lcup_report.php';
+require_once __DIR__ . '/lcup_edits.php';
 
 function lcup_lock() {
     $d = private_dir(); $dir = ($d && is_dir($d) && is_writable($d)) ? $d : data_dir_ready('lcup');
@@ -97,6 +98,7 @@ function lcup_sync_branch(LcupClient $c, array $m, array &$sum, float $deadline)
     lcup_source("To'lovlar ro'yxati (yo'qolganlar)", $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_resolve_missing($c, $bid, $sum, $deadline); });
     lcup_source('Qarzdorlar', $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_check_debts($c, $bid, $sum, $deadline); });
     lcup_source('Chegirmalar', $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_check_discounts($c, $bid, $sum, $deadline); });
+    lcup_source("Minus to'lov tahrirlari (talabani aniqlash)", $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_resolve_charge_edits($c, $bid, $sum, $deadline); });
 }
 
 /* ============================================================== activity log (every staff member) */
@@ -111,6 +113,7 @@ function lcup_acts_ingest(int $bid, array $rows, ?string $staff, bool $base, ?ar
         if (!$ins->rowCount()) { $known++; continue; }
         $new++;
         $charge = (bool)preg_match('/minus/iu', $r['text']);
+        if ($type === 'log_edit' && $charge) db()->prepare("UPDATE lcup_acts SET state = 'pending' WHERE branch_id = ? AND act_id = ?")->execute([$bid, $r['act_id']]);     // aniqlanmoqda: the student is found later (lcup_edits.php)
         $inGap = $gap && $r['time'] && $r['time'] >= $gap['from'] && $r['time'] <= $gap['to'];
         $ev = ['type' => $type, 'branch_id' => $bid, 'source' => 'worker_report', 'staff' => $staff, 'student_id' => $r['student_id'], 'student_name' => $r['student_name'], 'group_name' => $r['group_name'],
                'amount' => $r['amount'], 'lcup_time' => $r['time'], 'raw' => $r['raw'], 'backfill' => $base, 'is_charge' => $charge, 'flags' => $inGap ? ['gap'] : [], 'dedupe_key' => "act|$bid|{$r['act_id']}"];
@@ -415,7 +418,7 @@ function lcup_nightly_slice(LcupClient $c, int $bid, array &$sum, float $deadlin
         $left = (int)lcup_num('charge_per_run'); $q = db()->prepare("SELECT student_id, name FROM lcup_student_ids WHERE branch_id = ? AND (last_check IS NULL OR last_check < ?) ORDER BY student_id LIMIT 1");
         while ($left-- > 0 && microtime(true) < $deadline - 4) {
             $q->execute([$bid, $st['started']]); $row = $q->fetch(); if (!$row) { $st['phase'] = 'finish'; break; }
-            try { $rows = lcup_student_charges($c, $row['student_id']); lcup_charges_diff($bid, $row['student_id'], (string)$row['name'], $rows); $st['sfail'] = 0; }
+            try { $rows = lcup_student_charges($c, $row['student_id'], $bid); lcup_charges_diff($bid, $row['student_id'], (string)$row['name'], $rows); $st['sfail'] = 0; }
             catch (LcupError $e) { if (in_array($e->kind, ['login', 'network', 'ratelimit', 'config'], true)) throw $e; $st['sfail']++; if ($st['sfail'] >= 3) { $sum['warnings'][] = (branch_get($bid)['name'] ?? $bid) . ": " . $e->getMessage() . " — 3 marta ketma-ket; tungi oylik-to'lov snapshoti to'xtatildi."; $st['phase'] = 'finish'; db()->prepare("UPDATE lcup_student_ids SET last_check = ? WHERE branch_id = ?")->execute([lcup_now(), $bid]); break; } }
             db()->prepare("UPDATE lcup_student_ids SET last_check = ? WHERE branch_id = ? AND student_id = ?")->execute([lcup_now(), $bid, $row['student_id']]); $st['students']++;
         }
@@ -467,10 +470,16 @@ function lcup_check_debts(LcupClient $c, int $bid, array &$sum, float $deadline)
         $lg->execute([$bid, date('Y-m-d H:i:s', strtotime($o['updated_at'] . ' -15 minutes'))]); $logs = $lg->fetchAll();
         $staffs = array_values(array_unique(array_filter(array_column($logs, 'staff')))); $who = count($staffs) === 1 ? $staffs[0] : null;
         $link = $logs ? " · jurnal: «minus to'lov tahrirlandi» " . date('H:i', strtotime($logs[0]['act_time'])) . ($staffs ? ' (' . implode(', ', $staffs) . ')' : '') : '';
-        if (count($logs) === 1 && $logs[0]) db()->prepare("UPDATE lcup_acts SET student_id = COALESCE(student_id, ?), student_name = COALESCE(student_name, ?) WHERE branch_id = ? AND act_id = ?")->execute([$o['student_id'], $o['student_name'], $bid, $logs[0]['act_id']]);
         lcup_event_add(['type' => 'debt_reduced', 'branch_id' => $bid, 'source' => 'debtors', 'staff' => $who, 'student_id' => $o['student_id'], 'student_name' => $o['student_name'], 'group_name' => $o['group_name'] ?? null, 'amount' => $delta,
             'before' => ['debt' => (float)$o['debt']], 'after' => ['debt' => $nd],
             'details' => "Qarz " . fmt($o['debt']) . " → " . fmt($nd) . " (−" . fmt($delta) . ($nd < 0.5 ? ", ro'yxatdan chiqdi" : '') . "), mos to'lov jurnalda topilmadi" . $link, 'dedupe_key' => "debt|$bid|{$o['d_key']}|" . (int)$nd . '|' . date('YmdHi')]);
+    }
+    if (!$base) {                                                                       // remember WHO's debt moved: candidates for "minus to'lov tahrirlandi" rows (lcup_edits.php)
+        $chg = json_decode((string)lcup_state_get("debt_changed_$bid", '[]'), true) ?: []; $cut = date('Y-m-d H:i:s', strtotime('-60 minutes')); $chg = array_values(array_filter($chg, function ($x) use ($cut) { return ($x['at'] ?? '') >= $cut; }));
+        $oldMap = []; foreach ($old as $o) $oldMap[$o['d_key']] = $o;
+        foreach ($new as $k => $x) { $od = isset($oldMap[$k]) ? (float)$oldMap[$k]['debt'] : null; if (($od === null || abs($od - (float)$x['debt']) >= 1) && $x['student_id']) $chg[] = ['sid' => (string)$x['student_id'], 'name' => $x['student_name'], 'at' => lcup_now()]; }
+        foreach ($oldMap as $k => $o) if (!isset($new[$k]) && $o['student_id']) $chg[] = ['sid' => (string)$o['student_id'], 'name' => $o['student_name'], 'at' => lcup_now()];
+        lcup_state_set("debt_changed_$bid", json_encode(array_slice($chg, -200), JSON_UNESCAPED_UNICODE));
     }
     db()->prepare("DELETE FROM lcup_debts WHERE branch_id = ?")->execute([$bid]);
     $ins = db()->prepare("INSERT OR REPLACE INTO lcup_debts (branch_id, d_key, student_id, student_name, group_name, debt, updated_at) VALUES (?,?,?,?,?,?,?)");
@@ -506,8 +515,13 @@ function lcup_check_discounts(LcupClient $c, int $bid, array &$sum, float $deadl
 
 /* ============================================================== nightly: monthly charges ("Oylik to'lov" / "Aktivlashtirilganda") of every active student */
 /** The student "To'lovlar" tab is filled by Livewire.emit('studentTolovlarOchilsin', id) — whitelisted, read-only. Returns the negative / monthly rows. */
-function lcup_student_charges(LcupClient $c, string $sid): array {
+function lcup_student_charges(LcupClient $c, string $sid, ?int $bid = null): array {
     $page = $c->view_page('/admin/students/' . rawurlencode($sid));
+    if ($bid !== null) {                                                                 // the same GET also carries the "Tarix" rows: keep them (dedupe by hash), no extra request
+        $h = lcup_parse_student_history($page['html']);
+        if (!$h['rows'] && lcup_setting('history_via_livewire') === '1') { $fh = $c->view_history($page, $sid); if ($fh) $h = lcup_parse_student_history(implode("\n", $fh)); }
+        lcup_history_store($bid, $sid, $h['rows']);
+    }
     $frags = $c->view_emit($page, 'studentTolovlarOchilsin', [(string)$sid]);
     if (!$frags) throw new LcupError("O'quvchi sahifasida «To'lovlar» komponenti topilmadi (#$sid).", 'layout');
     $p = lcup_parse_student_payments(implode("\n", $frags));

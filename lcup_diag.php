@@ -45,6 +45,13 @@ function lcup_selftest(): array {
                     $sid = null; foreach ($w['rows'] as $r) if ($r['student_id']) { $sid = $r['student_id']; break; }
                     if ($sid) { try { $rows = lcup_student_charges($c, $sid); $add(true, "  O'quvchi «To'lovlar» tabi (Livewire): #$sid — " . count($rows) . " ta manfiy/oylik yozuv"); } catch (LcupError $e) { $add(false, "  O'quvchi tabi: " . $e->getMessage()); } }
                 } else $add(null, "  Livewire o'qish amallari o'chiq: faqat bitta xodim va filial o'qiladi");
+                $hid = null; foreach ($w['rows'] as $r0) if ($r0['student_id']) { $hid = $r0['student_id']; break; }
+                if ($hid) {                                                           // the page the "minus to'lov tahrirlandi" lookup depends on
+                    try { $hh = lcup_fetch_history($c, (int)$m['branch_id'], $hid); $mn = count(array_filter($hh['rows'], 'lcup_history_is_minus_edit'));
+                        if ($hh['rows']) $add(true, "  O'quvchi «Tarix» ({$hh['via']}): #$hid — " . count($hh['rows']) . " qator ({$hh['strategy']}), shundan minus tahrir: $mn");
+                        else $add(false, "  O'quvchi «Tarix»: #$hid sahifasida qatorlar topilmadi" . (lcup_setting('history_via_livewire') === '1' ? ' (Livewire hodisasi bilan ham)' : " — GET HTML da yo'q, u Livewire (studentHistoryOchilsin) bilan yuklanayotgan bo'lishi mumkin. Admin → LC-UP da «Tarix uchun Livewire hodisasi» ni yoqing yoki Diagnostika yuboring")); }
+                    catch (LcupError $e) { $add(false, "  O'quvchi «Tarix»: " . $e->getMessage()); }
+                }
                 $dummy = ['warnings' => []];
                 foreach ([['archive', lcup_setting('archive_url'), "O'chirilgan to'lovlar"], ['payments', lcup_setting('payments_url'), "To'lovlar ro'yxati (" . lcup_setting('payments_url') . ")"]] as [$kind, $url, $label]) {
                     try { $a = lcup_fetch_page($c, (int)$m['branch_id'], $url, 1, $kind, $dummy); $ids = count(array_filter(array_column($a['rows'], 'pay_id')));
@@ -104,6 +111,10 @@ function lcup_diagnostics(): array {
                             catch (LcupError $e) { $lines[] = "  student tab #$sid0: " . $e->getMessage(); } }
                     }
                     if ($key === 'worker') {
+                        $p1 = lcup_parse_worker_reports($r['body'], date('Y-m-d')); $hs = null; foreach ($p1['rows'] as $rr) if ($rr['student_id']) { $hs = $rr['student_id']; break; }
+                        if ($hs) { try { $sp1 = $c->view_page('/admin/students/' . $hs); $hx = lcup_parse_student_history($sp1['html']); $save("{$tag}_student_{$hs}_GET.html", lcup_diag_clean($sp1['html']));
+                            $lines[] = "  student #$hs «Tarix» GET: structure=" . ($hx['structure'] ? 'ha' : "YO'Q") . " strategy={$hx['strategy']} rows=" . count($hx['rows']) . " minus-tahrir=" . count(array_filter($hx['rows'], 'lcup_history_is_minus_edit')); }
+                            catch (LcupError $e) { $lines[] = "  student «Tarix» GET: " . $e->getMessage(); } }
                         $links = lcup_nav_links($r['body']); $save("{$tag}_links.txt", implode("\n", array_map(function ($l) { return $l[0] . ' -> ' . $l[1]; }, $links)));
                         $p = lcup_parse_worker_reports($r['body'], date('Y-m-d')); $lines[] = "  worker_reports: strategy={$p['strategy']} rows=" . count($p['rows']) . " staff=" . ($p['staff'] ?? '?');
                     } elseif (strpos($key, 'archive') === 0 || strpos($key, 'payments') === 0) {

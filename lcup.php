@@ -43,6 +43,7 @@ $qs = function (array $o) use ($fb, $fsev, $fst, $ftype, $fq, $from, $to, $hist,
 $last = lcup_state_get('last_success'); $lastRun = lcup_state_get('last_run'); $fails = (int)lcup_state_get('fail_count', 0); $lastErr = (string)lcup_state_get('last_error', '');
 $minRun = lcup_minutes_since_run(); $stale = $minRun !== null && $minRun >= 5; $never = $lastRun === null;
 $gaps = db()->query("SELECT * FROM lcup_gaps ORDER BY id DESC LIMIT 5")->fetchAll();
+$pendEdits = (int)db()->query("SELECT COUNT(*) FROM lcup_acts WHERE type = 'log_edit' AND act_text LIKE '%minus%' AND state = 'pending'")->fetchColumn(); $unresEdits = (int)db()->query("SELECT COUNT(*) FROM lcup_acts WHERE type = 'log_edit' AND act_text LIKE '%minus%' AND state = 'unresolved'")->fetchColumn();
 $warn = json_decode((string)lcup_state_get('last_warnings', '[]'), true) ?: []; $ign = json_decode((string)lcup_state_get('ignored_texts', '{}'), true) ?: []; arsort($ign);
 $baseUrl = rtrim((string)cfg('LCUP_BASE_URL', 'https://oxfordlc.lc-up.com'), '/');
 $unread = lcup_unread_count(); $labels = lcup_flag_labels(); $typeL = lcup_type_labels();
@@ -71,6 +72,7 @@ ui_start('lcup');
       <div class="kv"><div class="k">Oxirgi muvaffaqiyatli sinxronizatsiya</div><div class="v"><?= $last ? e(date('d.m.Y H:i', strtotime($last))) . ' <span class="text-3 fs-sm">(' . (int)floor((time() - strtotime($last)) / 60) . ' daq. oldin)</span>' : '—' ?></div></div>
       <div class="kv"><div class="k">Ketma-ket xatolar</div><div class="v <?= $fails ? 'text-out' : '' ?>"><?= $fails ?></div></div>
       <div class="kv"><div class="k">Ko'rilmagan qizil</div><div class="v <?= $unread ? 'text-out' : '' ?>"><?= $unread ?></div></div>
+      <div class="kv"><div class="k">Minus to'lov tahrirlari</div><div class="v fs-sm"><?= $pendEdits ? '⏳ aniqlanmoqda: <b>' . $pendEdits . '</b>' : '' ?><?= $unresEdits ? ' <span class="text-out">aniqlanmadi: <b>' . $unresEdits . '</b></span>' : '' ?><?= (!$pendEdits && !$unresEdits) ? 'hammasi bog\'langan' : '' ?></div></div>
       <div class="kv"><div class="k">Telegram</div><div class="v"><?= lcup_tg_ready() ? (lcup_state_get('tg_last_error') ? '<span class="text-out">xato: ' . e(lcup_state_get('tg_last_error')) . '</span>' : 'ulangan ✓') : "<span class='text-out'>sozlanmagan</span>" ?></div></div>
       <?php foreach (lcup_map_rows() as $m): $nl = lcup_state_get('night_last_' . (int)$m['branch_id']); $ns = json_decode((string)lcup_state_get('night_' . (int)$m['branch_id'], ''), true) ?: []; ?>
       <div class="kv"><div class="k">Tungi to'liq tekshiruv · <?= e($m['branch_name']) ?></div><div class="v fs-sm"><?= $nl ? e($nl) : (($ns['date'] ?? '') === date('Y-m-d') ? 'bugun davom etmoqda (' . (int)($ns['pages'] ?? 0) . ' sahifa)' : "hali bo'lmagan") ?></div></div>

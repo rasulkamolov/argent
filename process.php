@@ -364,7 +364,7 @@ if (is_admin()) {
         $tm = function ($k, $d) { return preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', pstr($k)) ? pstr($k) : $d; };
         foreach (['summary_time' => $tm('summary_time', '21:00'), 'weekly_time' => $tm('weekly_time', '09:00'), 'quick_fix_min' => $num('quick_fix_min', 0, 120), 'small_amount' => $num('small_amount', 0, 100000000), 'late_minutes' => $num('late_minutes', 1, 10080), 'hot_pages' => $num('hot_pages', 1, 20), 'warm_pages' => $num('warm_pages', 0, 20), 'delay_ms' => $num('delay_ms', 0, 5000), 'night_pages_per_run' => $num('night_pages_per_run', 1, 200),
                  'work_from' => $tm('work_from', '08:00'), 'work_to' => $tm('work_to', '21:00'), 'eod_time' => $tm('eod_time', '21:00'), 'night_time' => $tm('night_time', '03:00'),
-                 'allow_switch_post' => !empty($_POST['allow_switch_post']) ? '1' : '0', 'alerts_on' => !empty($_POST['alerts_on']) ? '1' : '0'] as $k => $val) setting_set('lcup.' . $k, $val);
+                 'allow_switch_post' => !empty($_POST['allow_switch_post']) ? '1' : '0', 'history_via_livewire' => !empty($_POST['history_via_livewire']) ? '1' : '0', 'alerts_on' => !empty($_POST['alerts_on']) ? '1' : '0'] as $k => $val) setting_set('lcup.' . $k, $val);
         foreach (['worker_url', 'archive_url', 'payments_url', 'discount_url', 'debtors_url'] as $k) { $u = pstr($k); if ($u === '' || preg_match('~^/[A-Za-z0-9_\-/.]*$~', $u)) setting_set('lcup.' . $k, $u); }
         require_once __DIR__ . '/lcup_report.php'; lcup_settings_changed(['qoidalar/chegaralar' . (empty($_POST['alerts_on']) ? ' (Telegram ogohlantirish O\'CHIRILDI)' : '')]);
         done($A . '#lcup', "LC-UP sozlamalari saqlandi");

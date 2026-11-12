@@ -6,6 +6,9 @@
  *   login   : the Livewire call of the login component
  *   filial  : the top-bar branch dropdown (selects which branch is shown; changes no data)
  *   view    : read-only calls on /admin/worker_reports (choose staff, period, category, "yana ko'rsatish") and the student "To'lovlar" tab
+ *   history : the student "Tarix" tab: ONLY the component students.history-livewire, ONLY loading/rendering (see 'methods'),
+ *             and only while the setting history_via_livewire is on. Every other component of the student page
+ *             (students.edit-livewire, payment add/edit/delete, ...) is never contacted.
  *
  * Deliberately NOT allowed (examples): save, create*, store*, update*, edit*, delete*, destroy*, remove*, restore, and the payment
  * restore call  Livewire.emit('refresh', id).   Allowed names are matched EXACTLY, never by pattern.
@@ -14,42 +17,51 @@
 require_once __DIR__ . '/lcup_lib.php';
 
 const LCUP_LW_ALLOWED = [
-    'login'  => ['methods' => ['save'],                                                         'props' => ['mobile_number', 'password'], 'events' => ['globalSetMobileNumber']],
-    'filial' => ['methods' => ['renderFilials', 'change_filial'],                               'props' => ['filial_id'],                 'events' => []],
-    'view'   => ['methods' => ['openHistory', 'setPreset', 'setCat', 'loadMore', '$refresh'],   'props' => [],                            'events' => ['studentTolovlarOchilsin']],
+    'login'   => ['methods' => ['save'],                                                       'props' => ['mobile_number', 'password'], 'events' => ['globalSetMobileNumber']],
+    'filial'  => ['methods' => ['renderFilials', 'change_filial'],                             'props' => ['filial_id'],                 'events' => []],
+    'view'    => ['methods' => ['openHistory', 'setPreset', 'setCat', 'loadMore', '$refresh'], 'props' => [],                            'events' => ['studentTolovlarOchilsin']],
+    // student "Tarix" tab: one component, load/render only. Any other method name is refused and logged (REFUSED).
+    'history' => ['methods' => ['$refresh', 'render', 'init', 'load', 'loadMore'],             'props' => [],                            'events' => ['studentHistoryOchilsin'], 'components' => ['students.history-livewire']],
 ];
 /** Allowed parameter shapes per method (regex on the single parameter; null = no parameter). */
 const LCUP_LW_PARAMS = [
     'openHistory' => '/^\d{1,12}$/', 'setPreset' => '/^(today|7|30)$/', 'setCat' => '/^(all|lead|student|payment|group|message|other)$/',
-    'loadMore' => null, '$refresh' => null, 'renderFilials' => null, 'change_filial' => null, 'save' => null,
+    'loadMore' => null, '$refresh' => null, 'render' => null, 'renderFilials' => null, 'change_filial' => null, 'save' => null, 'init' => null, 'load' => null,
 ];
-/** Event names that are refused when they come back from the server inside a cascade (e.g. the payment restore event 'refresh'). */
-const LCUP_LW_FORBIDDEN = '/(delete|destroy|remove|restore|create|store|update|edit|insert|add|refresh$|^refresh|trash|save(?!$)|pay|sms|send|toggle|status)/i';
+/** Methods that may carry one numeric id (the student id) or nothing. */
+const LCUP_LW_OPTIONAL_ID = ['change_filial', 'init', 'load'];
+/** Components that must never receive a Livewire emit, whatever the page says (editing / adding / deleting / messaging ...). */
+const LCUP_LW_DENY_COMPONENT = '/(edit|add|create|delete|destroy|remove|update|store|save|sms|call|comment|note|eslatma|xarid|jarima|exam|imtixon|coin|davomat|attendance|group-add|chegirma)/i';
 
-/** Throws LcupError('config') unless every update is on the whitelist for $purpose. $cascade = events emitted by an already-allowed call. */
-function lcup_policy_check(string $purpose, array $updates, bool $cascade = false): void {
+/** Throws LcupError('config') unless every update is on the whitelist for $purpose (and, for "history", the component is the one allowed). */
+function lcup_policy_check(string $purpose, array $updates, bool $cascade = false, string $component = ''): void {
     $p = LCUP_LW_ALLOWED[$purpose] ?? null;
     if ($p === null) lcup_policy_refuse($purpose, 'noma\'lum maqsad');
+    if ($purpose === 'history' && lcup_setting('history_via_livewire') !== '1') lcup_policy_refuse($purpose, "Tarix uchun Livewire sozlamada o'chirilgan");
+    if (isset($p['components']) && !in_array($component, $p['components'], true)) lcup_policy_refuse($purpose, 'komponent ' . ($component !== '' ? $component : '?') . ' oq ro\'yxatda yo\'q');
     foreach ($updates as $u) {
         $t = $u['type'] ?? ''; $pl = $u['payload'] ?? [];
         if ($t === 'syncInput') { if (!in_array($pl['name'] ?? '', $p['props'], true)) lcup_policy_refuse($purpose, 'syncInput ' . ($pl['name'] ?? '?')); }
         elseif ($t === 'callMethod') {
             $m = (string)($pl['method'] ?? ''); $par = array_values((array)($pl['params'] ?? []));
-            if (!in_array($m, $p['methods'], true) || !array_key_exists($m, LCUP_LW_PARAMS)) lcup_policy_refuse($purpose, 'callMethod ' . $m);
+            if (!in_array($m, $p['methods'], true) || !array_key_exists($m, LCUP_LW_PARAMS)) lcup_policy_refuse($purpose, 'callMethod ' . $m . ($component !== '' ? " ($component)" : ''));
             $re = LCUP_LW_PARAMS[$m];
-            if ($m === 'change_filial') { if (count($par) > 1 || (count($par) === 1 && !preg_match('/^\d{1,12}$/', (string)$par[0]))) lcup_policy_refuse($purpose, "callMethod $m: parametr mos emas"); }
+            if (in_array($m, LCUP_LW_OPTIONAL_ID, true)) { if (count($par) > 1 || (count($par) === 1 && !preg_match('/^\d{1,12}$/', (string)$par[0]))) lcup_policy_refuse($purpose, "callMethod $m: parametr mos emas"); }
             elseif ($re === null) { if ($par) lcup_policy_refuse($purpose, "callMethod $m: parametr bo'lmasligi kerak"); }
             elseif (count($par) !== 1 || !preg_match($re, (string)$par[0])) lcup_policy_refuse($purpose, "callMethod $m: parametr mos emas");
         }
         elseif ($t === 'fireEvent') {
             $ev = (string)($pl['event'] ?? '');
-            $ok = in_array($ev, $p['events'], true) || ($cascade && preg_match('/^[A-Za-z0-9_.\-]{1,60}$/', $ev) && !preg_match(LCUP_LW_FORBIDDEN, $ev));
+            $ok = in_array($ev, $p['events'], true) || ($cascade && $purpose === 'view' && preg_match('/^[A-Za-z0-9_.\-]{1,60}$/', $ev) && !preg_match(LCUP_LW_FORBIDDEN, $ev));
             if (!$ok) lcup_policy_refuse($purpose, 'fireEvent ' . $ev);
-            if ($ev === 'studentTolovlarOchilsin' && (count((array)($pl['params'] ?? [])) !== 1 || !preg_match('/^\d{1,12}$/', (string)$pl['params'][0]))) lcup_policy_refuse($purpose, 'fireEvent parametr');
+            if (in_array($ev, ['studentTolovlarOchilsin', 'studentHistoryOchilsin'], true) && (count((array)($pl['params'] ?? [])) !== 1 || !preg_match('/^\d{1,12}$/', (string)$pl['params'][0]))) lcup_policy_refuse($purpose, 'fireEvent parametr');
         }
         else lcup_policy_refuse($purpose, 'update turi ' . $t);
     }
 }
+/** Event names that are refused when they come back from the server inside a cascade (e.g. the payment restore event 'refresh'). */
+const LCUP_LW_FORBIDDEN = '/(delete|destroy|remove|restore|create|store|update|edit|insert|add|refresh$|^refresh|trash|save(?!$)|pay|sms|send|toggle|status)/i';
+
 function lcup_policy_refuse(string $purpose, string $what): void {
     lcup_reqlog('REFUSED', '', $purpose, $what, 0, 0);
     throw new LcupError("Faqat-o'qish qoidasi: «" . $what . "» oq ro'yxatda yo'q va yuborilmadi.", 'config');

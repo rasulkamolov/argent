@@ -57,7 +57,8 @@ class LcupClient {
         $method = strtoupper($method); $purpose = $o['purpose'] ?? '';
         if ($method !== 'GET') {
             $okPost = $method === 'POST' && isset(LCUP_LW_ALLOWED[$purpose]) && preg_match('~/livewire/message/[\w.\-]+$~', $url)
-                && ($purpose === 'login' ? (bool)preg_match('~/livewire/message/[\w.\-]*login[\w.\-]*$~i', $url) : lcup_setting('allow_switch_post') === '1');
+                && ($purpose === 'login' ? (bool)preg_match('~/livewire/message/[\w.\-]*login[\w.\-]*$~i', $url)
+                    : ($purpose === 'history' ? (lcup_setting('history_via_livewire') === '1' && (bool)preg_match('~/livewire/message/students\.history-livewire$~', $url)) : lcup_setting('allow_switch_post') === '1'));
             if (!$okPost) { lcup_reqlog('REFUSED', (string)parse_url($url, PHP_URL_PATH), $purpose ?: $method, $method . ' ruxsat etilmagan', 0, 0); throw new LcupError("Faqat-o'qish qoidasi: bu so'rov ($method) taqiqlangan.", 'config'); }
         }
         $host = parse_url($url, PHP_URL_HOST);
@@ -103,8 +104,8 @@ class LcupClient {
 
     /* ---------------------------------------------------------------- Livewire v2 */
     private function lw(string $purpose, array &$comp, array $updates, string $referer, bool $cascade = false): array {
-        lcup_policy_check($purpose, $updates, $cascade);                               // the whitelist: nothing else gets past this line
         $name = $comp['fingerprint']['name'] ?? '';
+        lcup_policy_check($purpose, $updates, $cascade, $name);                        // the whitelist: nothing else gets past this line
         $payload = json_encode(['fingerprint' => $comp['fingerprint'], 'serverMemo' => $comp['memo'], 'updates' => $updates], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $r = $this->request('POST', $this->base . '/livewire/message/' . $name, ['purpose' => $purpose, 'detail' => lcup_updates_summary($updates), 'body' => $payload, 'accept' => 'text/html, application/xhtml+xml',
             'headers' => ['Content-Type: application/json', 'X-Livewire: true', 'X-CSRF-TOKEN: ' . $this->csrf, 'X-Requested-With: XMLHttpRequest', 'Origin: ' . $this->base, 'Referer: ' . $referer]]);
@@ -192,7 +193,21 @@ class LcupClient {
         $frags = [];
         foreach ($page['comps'] as $oid => $oc) {
             if (!in_array($event, (array)($oc['effects']['listeners'] ?? []), true)) continue;
+            $cn = (string)($oc['fingerprint']['name'] ?? '');
+            if (preg_match(LCUP_LW_DENY_COMPONENT, $cn)) { lcup_reqlog('SKIPPED', '', 'view', "komponent o'tkazib yuborildi (taqiqlangan): $cn / $event", 0, 0); continue; }
             $j = $this->lw('view', $page['comps'][$oid], [self::lw_event($event, $params)], $page['url']);
+            if (!empty($j['effects']['html'])) $frags[] = (string)$j['effects']['html'];
+        }
+        return $frags;
+    }
+    /** Student "Tarix" tab: Livewire.emit('studentHistoryOchilsin', id) delivered ONLY to students.history-livewire. Every other listener is skipped and logged. */
+    public function view_history(array &$page, string $sid): array {
+        $frags = [];
+        foreach ($page['comps'] as $oid => $oc) {
+            $cn = (string)($oc['fingerprint']['name'] ?? '');
+            if (!in_array('studentHistoryOchilsin', (array)($oc['effects']['listeners'] ?? []), true)) continue;
+            if ($cn !== 'students.history-livewire') { lcup_reqlog('SKIPPED', '', 'history', "komponent oq ro'yxatda yo'q: $cn", 0, 0); continue; }
+            $j = $this->lw('history', $page['comps'][$oid], [self::lw_event('studentHistoryOchilsin', [(string)$sid])], $page['url']);
             if (!empty($j['effects']['html'])) $frags[] = (string)$j['effects']['html'];
         }
         return $frags;

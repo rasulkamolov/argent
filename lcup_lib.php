@@ -6,16 +6,16 @@
 require_once __DIR__ . '/layout.php';   // fmt(), e() ... (definitions only, prints nothing)
 
 /** Flags that make an event RED (instant Telegram alert + unread counter). */
-const LCUP_RED_FLAGS = ['amount_down', 'amount_zero', 'deleted', 'debt_reduction', 'new_discount', 'discount_changed', 'discount_removed', 'charge_changed', 'small_amount', 'off_hours', 'cash_missing', 'no_details', 'settings_changed', 'payment_missing'];
+const LCUP_RED_FLAGS = ['charge_reduced', 'charge_unresolved', 'amount_down', 'amount_zero', 'deleted', 'debt_reduction', 'new_discount', 'discount_changed', 'discount_removed', 'charge_changed', 'small_amount', 'off_hours', 'cash_missing', 'no_details', 'settings_changed', 'payment_missing'];
 /** Flags that make an event YELLOW (only in the daily summary): increases, date/method/group changes, quick corrections, non-zero freeze charges. */
-const LCUP_YELLOW_FLAGS = ['amount_up', 'field_change', 'quick_fix', 'freeze_nonzero'];
+const LCUP_YELLOW_FLAGS = ['charge_increased', 'amount_up', 'field_change', 'quick_fix', 'freeze_nonzero'];
 
 function lcup_now(): string { return date('Y-m-d H:i:s'); }
 function lcup_defaults(): array {
     return ['small_amount' => '5000', 'work_from' => '08:00', 'work_to' => '21:00', 'late_minutes' => '60', 'eod_time' => '21:00',
             'delay_ms' => '350', 'budget_s' => '40', 'window_days' => '40', 'debt_interval' => '1', 'discount_interval' => '1', 'monitor_name' => '', 'summary_time' => '21:00', 'weekly_time' => '09:00', 'quick_fix_min' => '10', 'catchup_gap_min' => '10',
             'hot_pages' => '3', 'warm_pages' => '3', 'night_time' => '03:00', 'night_max_pages' => '3000', 'night_pages_per_run' => '25',
-            'allow_switch_post' => '1', 'switch_url' => '',
+            'allow_switch_post' => '1', 'history_via_livewire' => '1', 'hist_batch' => '20', 'switch_url' => '',
             'worker_url' => '/admin/worker_reports', 'students_url' => '/admin/students', 'charge_per_run' => '20', 'archive_url' => '/admin/archive/tolovlars', 'payments_url' => '/admin/tolovlars',
             'discount_url' => '/admin/discount', 'debtors_url' => '/admin/qarzdorlar', 'alerts_on' => '1'];
 }
@@ -63,12 +63,12 @@ function lcup_type_labels(): array {
             'log_edit' => "To'lov tahrirlandi (tafsilotsiz)", 'log_delete' => "To'lov o'chirildi (jurnal)", 'debt_reduced' => 'Qarz kamaygan',
             'amount_changed' => "To'lov summasi o'zgartirilgan", 'payment_missing' => "To'lov ro'yxatda topilmadi", 'staff_activity' => 'Xodim faoliyati (tafsilotsiz)', 'discount_new' => 'Yangi chegirma', 'discount_changed' => "Chegirma o'zgargan", 'freeze_charge' => 'Muzlatishda pul yechildi',
             'student_frozen' => 'Talaba muzlatildi', 'student_activated' => 'Talaba aktivlashtirildi', 'payment_other' => "To'lov bilan bog'liq amal",
-            'cash_missing' => 'Naqd Argentga kiritilmagan', 'charge_changed' => "Oylik to'lov summasi o'zgartirilgan", 'discount_removed' => "Chegirma o'chirilgan", 'settings_changed' => "Monitoring sozlamalari o'zgartirildi", 'webhook' => 'Webhook', 'system' => 'Tizim', 'other' => 'Boshqa'];
+            'cash_missing' => 'Naqd Argentga kiritilmagan', 'charge_changed' => "Oylik to'lov summasi o'zgartirilgan", 'charge_edit_resolved' => "Minus to'lov tahriri aniqlandi", 'charge_edit_unresolved' => "Minus to'lov tahriri aniqlanmadi", 'discount_removed' => "Chegirma o'chirilgan", 'settings_changed' => "Monitoring sozlamalari o'zgartirildi", 'webhook' => 'Webhook', 'system' => 'Tizim', 'other' => 'Boshqa'];
 }
 function lcup_type_label(string $t): string { return lcup_type_labels()[$t] ?? $t; }
 function lcup_flag_labels(): array {
     $late = (int)lcup_num('late_minutes'); $lt = $late % 60 === 0 ? ($late / 60) . ' soatdan keyin' : $late . " daqiqadan keyin";
-    return ['amount_down' => 'Summa kamaytirilgan', 'amount_zero' => '0 so\'mga tushirilgan', 'amount_up' => 'Summa oshirilgan', 'field_change' => "Sana/usul/guruh o'zgargan", 'quick_fix' => 'Yaratilgach darrov tuzatilgan', 'freeze_nonzero' => "Muzlatishda pul yechilgan", 'charge_changed' => "Oylik to'lov o'zgargan", 'discount_changed' => "Chegirma o'zgargan", 'discount_removed' => "Chegirma o'chirilgan", 'settings_changed' => "Sozlamalar o'zgargan", 'payment_missing' => "Ro'yxatda yo'q", 'gap' => 'Uzilish davrida aniqlangan',
+    return ['charge_reduced' => "Oylik to'lov kamaytirildi", 'charge_increased' => "Oylik to'lov oshirildi", 'charge_unresolved' => "Minus to'lov tahriri aniqlanmadi", 'amount_down' => 'Summa kamaytirilgan', 'amount_zero' => '0 so\'mga tushirilgan', 'amount_up' => 'Summa oshirilgan', 'field_change' => "Sana/usul/guruh o'zgargan", 'quick_fix' => 'Yaratilgach darrov tuzatilgan', 'freeze_nonzero' => "Muzlatishda pul yechilgan", 'charge_changed' => "Oylik to'lov o'zgargan", 'discount_changed' => "Chegirma o'zgargan", 'discount_removed' => "Chegirma o'chirilgan", 'settings_changed' => "Sozlamalar o'zgargan", 'payment_missing' => "Ro'yxatda yo'q", 'gap' => 'Uzilish davrida aniqlangan',
             'amount_changed' => "Summa o'zgartirilgan", 'edited' => 'Tahrirlangan', 'late_edit' => "$lt tahrirlangan", 'deleted' => "O'chirilgan", 'late_delete' => "$lt o'chirilgan", 'no_reason' => 'Sababsiz',
             'debt_reduction' => 'Qarz/hisob kamaygan', 'new_discount' => 'Yangi chegirma', 'discount_up' => 'Chegirma oshgan', 'small_amount' => fmt(lcup_num('small_amount')) . " dan kam",
             'off_hours' => 'Ish vaqtidan tashqari', 'cash_missing' => 'Naqd Argentga kiritilmagan', 'no_details' => "Tafsilot yo'q", 'weak' => "Taxminiy aniqlash"];
@@ -125,10 +125,12 @@ function lcup_compute_flags(array $e): array {
     if ($type === 'discount_changed') $f[] = 'discount_changed';
     if ($type === 'discount_removed') $f[] = 'discount_removed';
     if ($type === 'charge_changed') $f[] = 'charge_changed';
+    if ($type === 'charge_edit_resolved' && isset($before['amount'], $after['amount'])) { $ob = abs((float)$before['amount']); $oa = abs((float)$after['amount']); if ($oa < $ob - 0.5) $f[] = 'charge_reduced'; elseif ($oa > $ob + 0.5) $f[] = 'charge_increased'; }
+    if ($type === 'charge_edit_unresolved') $f[] = 'charge_unresolved';
     if ($type === 'cash_missing') $f[] = 'cash_missing';
     if ($type === 'settings_changed') $f[] = 'settings_changed';
     if ($type === 'payment_missing') $f[] = 'payment_missing';
-    if (!in_array($type, ['cash_missing', 'system', 'webhook', 'debt_reduced', 'amount_changed', 'payment_missing', 'staff_activity', 'settings_changed', 'charge_changed', 'discount_changed', 'discount_new', 'discount_removed'], true)) {
+    if (!in_array($type, ['cash_missing', 'system', 'webhook', 'debt_reduced', 'amount_changed', 'payment_missing', 'staff_activity', 'settings_changed', 'charge_changed', 'charge_edit_resolved', 'charge_edit_unresolved', 'discount_changed', 'discount_new', 'discount_removed'], true)) {
         $t = !empty($e['lcup_time']) ? substr($e['lcup_time'], 11, 5) : date('H:i');
         if (strlen($t) === 5 && lcup_outside_hours($t)) $f[] = 'off_hours';
     }
