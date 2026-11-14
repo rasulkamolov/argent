@@ -1,49 +1,57 @@
 <?php
-session_start();
-include 'db.php';
-if (!isset($_SESSION['user_id'])) die("Kirish taqiqlangan");
-$id = $_GET['id'];
-$hist = $conn->prepare("SELECT h.*, u.username FROM transaction_history h LEFT JOIN users u ON h.user_id=u.id WHERE transaction_id=? ORDER BY changed_at DESC");
-$hist->execute([$id]);
-$logs = $hist->fetchAll(PDO::FETCH_ASSOC);
+require_once __DIR__ . '/layout.php';
+require_login();
+
+$id = (int)($_GET['id'] ?? 0);
+$trans = tx_authorized($id);
+if ($trans) { $au = db()->prepare("SELECT username FROM users WHERE id = ?"); $au->execute([$trans['user_id']]); $trans['author'] = $au->fetchColumn(); }
+
+$hist = db()->prepare("SELECT h.*, u.username FROM transaction_history h LEFT JOIN users u ON h.user_id=u.id WHERE transaction_id=? ORDER BY changed_at DESC, h.id DESC");
+if ($trans) { $hist->execute([$id]); $logs = $hist->fetchAll(); } else { $logs = []; }
+$back = $trans ? 'index.php?date=' . urlencode($trans['date']) : 'index.php';
+
+ui_head("O'zgarishlar tarixi");
+ui_start('daily');
 ?>
-<!DOCTYPE html>
-<html lang="uz">
-<head>
-    <meta charset="UTF-8">
-    <title>Tarix</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>body{font-family:'Plus Jakarta Sans',sans-serif; background-color: #fafafa;}</style>
-</head>
-<body class="text-zinc-800 p-8">
-    <div class="max-w-xl mx-auto">
-        <button onclick="history.back()" class="inline-flex items-center gap-2 text-sm font-bold text-zinc-500 hover:text-zinc-900 mb-6 transition"><i data-lucide="arrow-left" class="w-4 h-4"></i> Orqaga</button>
-        <h3 class="font-bold text-zinc-800 mb-4 text-xl">O'zgarishlar Tarixi</h3>
-        <?php if(count($logs)>0): ?>
-        <div class="bg-white rounded-3xl shadow-sm border border-zinc-200 overflow-hidden">
-            <?php foreach($logs as $l): ?>
-            <div class="p-5 border-b border-zinc-50 last:border-0 hover:bg-zinc-50/50 transition">
-                <div class="flex justify-between items-center mb-1">
-                    <span class="font-bold text-sm text-zinc-900"><?= $l['username'] ?></span>
-                    <span class="text-xs text-zinc-400"><?= $l['changed_at'] ?></span>
-                </div>
-                <div class="text-xs text-zinc-500 mb-2">O'zgartirildi: <span class="font-bold text-zinc-700"><?= $l['field_name'] ?></span></div>
-                <div class="flex gap-2 items-center text-sm">
-                    <span class="bg-rose-50 text-rose-600 px-2 py-1 rounded-lg line-through decoration-rose-500/50 decoration-2"><?= $l['old_value'] ?></span>
-                    <i data-lucide="arrow-right" class="w-4 h-4 text-zinc-300"></i>
-                    <span class="bg-emerald-50 text-emerald-600 px-2 py-1 rounded-lg font-bold border border-emerald-100"><?= $l['new_value'] ?></span>
-                </div>
-            </div>
-            <?php endforeach; ?>
-        </div>
-        <?php else: ?>
-            <div class="text-center py-12 bg-white rounded-3xl border border-zinc-200">
-                <p class="text-zinc-400">Tarix topilmadi.</p>
-            </div>
-        <?php endif; ?>
+<div class="page page-narrow">
+  <a class="btn btn-ghost btn-sm" href="<?= e($back) ?>" style="margin-left:-8px;margin-bottom:8px"><?= icon('arrow-left', 'i-sm') ?> Orqaga</a>
+  <div class="page-head"><div><h1 class="page-title">O'zgarishlar tarixi</h1><p class="page-sub">Tranzaksiya #<?= $id ?></p></div></div>
+
+  <?php if ($trans): $in = $trans['cash_in'] == 1; $mm = method_meta(method_of($trans)); ?>
+  <div class="card card-pad row" style="margin-bottom:16px">
+    <span class="icon-tile <?= $in ? 'in' : 'out' ?>"><?= icon($in ? 'arrow-down-left' : 'arrow-up-right') ?></span>
+    <div class="grow">
+      <div class="fw-7"><?= e($trans['category_name'] ?: ($in ? 'Kirim' : 'Chiqim')) ?></div>
+      <div class="fs-xs text-3"><?= e(uz_date($trans['date'])) ?> · <?= e($mm['label']) ?> · <?= e($trans['author'] ?? '') ?></div>
     </div>
-    <script>lucide.createIcons();</script>
-</body>
-</html>
+    <div class="fw-8 num <?= $in ? 'text-in' : 'text-out' ?>"><?= $in ? '+' : '−' ?><?= fmt($trans['payment']) ?></div>
+  </div>
+  <?php endif; ?>
+
+  <?php if (!$trans): ?>
+  <div class="card empty"><div class="icon-tile"><?= icon('shield-alert', 'i-lg') ?></div><b>Tranzaksiya topilmadi</b><span class="fs-sm">U mavjud emas yoki boshqa filialga tegishli.</span></div>
+  <?php elseif (count($logs) > 0): ?>
+  <ol class="card clip list" style="list-style:none;margin:0;padding:0">
+    <?php foreach ($logs as $l): ?>
+    <li class="card-pad">
+      <div class="row between" style="flex-wrap:wrap;gap:4px 12px">
+        <span class="row gap-2"><span class="avatar avatar-sm"><?= e(mb_substr((string)$l['username'], 0, 1)) ?></span><b><?= e($l['username'] ?: 'Noma\'lum') ?></b></span>
+        <time class="fs-xs text-3 num"><?= e($l['changed_at']) ?></time>
+      </div>
+      <div class="fs-sm text-2 mt-2"><?= e($l['field_name']) ?> o'zgartirildi</div>
+      <div class="row gap-2 row-wrap mt-2">
+        <span class="badge badge-out" style="text-decoration:line-through;white-space:normal;max-width:100%"><?= e($l['old_value'] === '' ? '—' : $l['old_value']) ?></span>
+        <?= icon('arrow-right', 'i-sm text-3') ?>
+        <span class="badge badge-in" style="white-space:normal;max-width:100%"><?= e($l['new_value'] === '' ? '—' : $l['new_value']) ?></span>
+      </div>
+    </li>
+    <?php endforeach; ?>
+  </ol>
+  <?php else: ?>
+  <div class="card empty">
+    <div class="icon-tile"><?= icon('history', 'i-lg') ?></div>
+    <b>Hali o'zgarish yo'q</b><span class="fs-sm">Bu tranzaksiya tahrirlanmagan.</span>
+  </div>
+  <?php endif; ?>
+</div>
+<?php ui_end(['active' => 'daily']);

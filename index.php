@@ -1,364 +1,444 @@
 <?php
-session_start();
-include 'db.php';
-if (isset($_GET['logout'])) { session_destroy(); header("Location: index.php"); exit(); }
+require_once __DIR__ . '/layout.php';
+require_once __DIR__ . '/proofs.php';
 
-// --- LOGIN ---
-if (!isset($_SESSION['user_id'])) {
-?>
-<!DOCTYPE html>
-<html lang="uz">
-<head><meta charset="utf-8">
-    
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kirish - OXFORD</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>body{font-family:'Plus Jakarta Sans',sans-serif;}</style>
-</head>
-<body class="bg-zinc-50 flex items-center justify-center min-h-screen">
-    <div class="w-full max-w-sm p-8 bg-white rounded-2xl shadow-xl border border-zinc-100">
-        <div class="text-center mb-8">
-    <img 
-        src="logo.png" 
-        alt="Logo" 
-        class="mx-auto h-14 w-14 rounded-full object-cover mb-4"
-    >
-    <h1 class="text-2xl font-bold text-zinc-900 tracking-tight">OXFORD</h1>
-    <p class="text-zinc-500 text-sm mt-2">Tizimga kirish</p>
-</div>
-        <?php if(isset($_GET['error'])): ?>
-            <div class="bg-rose-50 text-rose-600 p-3 rounded-lg text-sm mb-4 text-center border border-rose-100"><?= $_GET['error'] ?></div>
-        <?php endif; ?>
-        <form action="process.php" method="post" class="space-y-4">
-            <input type="hidden" name="action" value="login">
-            <input type="text" name="username" placeholder="Login" class="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all" required>
-            <input type="password" name="password" placeholder="Parol" class="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all" required>
-            <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200">Kirish</button>
-        </form>
+/* =========================================================================
+   LOGIN
+   ========================================================================= */
+if (!auth_user()) {
+    $err = $_SESSION['login_error'] ?? ''; unset($_SESSION['login_error']);
+    $lastUser = $_SESSION['login_user'] ?? ''; unset($_SESSION['login_user']);
+    ui_head('Kirish');
+    ?>
+<body>
+<div class="auth">
+  <section class="auth-panel" aria-hidden="true">
+    <div class="brand" style="color:#fff">
+      <span class="brand-mark"><img src="assets/logo-64.png" alt="" width="30" height="30"></span>
+      <span class="brand-name" style="font-size:18px;color:#fff"><?= e(APP_NAME) ?></span>
     </div>
-</body>
-</html>
-<?php exit(); } 
+    <div>
+      <h2>Barcha filiallar moliyasi — bir joyda, aniq va tushunarli.</h2>
+      <p>Har bir filial o'z kassasi, kassirlari va hisobotlariga ega. Rahbariyat esa butun tarmoqni bir qarashda ko'radi.</p>
+      <div class="auth-feats">
+        <div><span class="icon-tile"><?= icon('store', 'i-sm') ?></span> Filiallar bo'yicha alohida kassa va hisobot</div>
+        <div><span class="icon-tile"><?= icon('chart-line', 'i-sm') ?></span> Taqqoslash, dinamika va grafik analitika</div>
+        <div><span class="icon-tile"><?= icon('smartphone', 'i-sm') ?></span> Telefon va kompyuterda qulay</div>
+      </div>
+    </div>
+    <div class="fs-sm" style="color:rgba(255,255,255,.6);position:relative;z-index:1">© <?= date('Y') ?> <?= e(APP_NAME) ?></div>
+  </section>
 
-// --- DASHBOARD ---
-date_default_timezone_set('Asia/Tashkent');
-$current_date = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
-$role = $_SESSION['role'];
+  <section class="auth-form-wrap">
+    <div class="auth-card">
+      <div class="center" style="margin-bottom:24px">
+        <div class="auth-logo"><img src="assets/logo-192.png" alt="<?= e(APP_NAME) ?> logotipi" width="58" height="58"></div>
+        <h1 class="page-title"><?= e(APP_NAME) ?> <span class="text-primary"><?= e(APP_TAGLINE) ?></span></h1>
+        <p class="text-3 mt-1">Tizimga kirish uchun ma'lumotlaringizni kiriting</p>
+      </div>
 
-$can_edit = true;
-$can_delete = false;
-if ($role == 'staff') {
-    $setting_edit = $conn->query("SELECT value FROM settings WHERE key='staff_can_edit'")->fetchColumn();
-    $can_edit = ($setting_edit === false || $setting_edit === '1');
-    $setting_del = $conn->query("SELECT value FROM settings WHERE key='staff_can_delete'")->fetchColumn();
-    $can_delete = ($setting_del === '1');
-} elseif ($role === 'admin') {
-    $can_delete = true;
+      <?php if ($err): ?>
+        <div class="alert error" role="alert" style="margin-bottom:16px"><?= icon('circle-alert') ?> <span><?= e($err) ?></span></div>
+      <?php endif; ?>
+
+      <form action="process.php" method="post" class="stack" data-loading>
+        <?= csrf_field() ?>
+        <input type="hidden" name="action" value="login">
+        <div class="field">
+          <label class="label" for="username">Login</label>
+          <div class="input-icon">
+            <?= icon('user') ?>
+            <input class="input" id="username" type="text" name="username" value="<?= e($lastUser) ?>" placeholder="Loginingiz" autocomplete="username" autocapitalize="none" autocorrect="off" required <?= $lastUser === '' ? 'autofocus' : '' ?>>
+          </div>
+        </div>
+        <div class="field">
+          <label class="label" for="password">Parol</label>
+          <div class="input-icon">
+            <?= icon('lock') ?>
+            <input class="input" id="password" type="password" name="password" placeholder="Parolingiz" autocomplete="current-password" required <?= $lastUser !== '' ? 'autofocus' : '' ?>>
+            <button type="button" class="btn btn-ghost btn-icon btn-sm eye" data-toggle-pass="#password" aria-label="Parolni ko'rsatish"><?= icon('eye') ?></button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-lg btn-block">Kirish <?= icon('arrow-right') ?></button>
+      </form>
+    </div>
+  </section>
+</div>
+<?php ui_footer(); exit(); }
+
+/* =========================================================================
+   DAILY PAGE (scoped to the user's branch / admin's selected branch)
+   ========================================================================= */
+$me = auth_user();
+$scope = scope_branch();               // 0 = all branches (admin only)
+$today = date('Y-m-d');
+$current_date = (isset($_GET['date']) && valid_date($_GET['date'])) ? $_GET['date'] : $today;
+$prev_date = date('Y-m-d', strtotime("$current_date -1 day"));
+$next_date = date('Y-m-d', strtotime("$current_date +1 day"));
+$is_today = $current_date === $today;
+$all_mode = $scope === 0;
+
+$w = "t.date = :date"; $params = [':date' => $current_date];
+if ($scope) { $w .= " AND t.branch_id = :b"; $params[':b'] = $scope; }
+elseif (!is_admin()) { $w .= " AND 0"; }
+$stmt = db()->prepare("SELECT t.*, c.name AS category_name, u.username AS author, b.name AS branch_name, b.color AS branch_color
+    FROM transactions t LEFT JOIN categories c ON t.category_id = c.id LEFT JOIN users u ON t.user_id = u.id LEFT JOIN branches b ON b.id = t.branch_id
+    WHERE $w ORDER BY t.id DESC");
+$stmt->execute($params);
+$transactions = $stmt->fetchAll();
+
+// day stats per method + money on hand
+$stats = [];
+foreach (['cash', 'click', 'bank', 'total'] as $k) $stats[$k] = ['in' => 0, 'out' => 0];
+$n_in = $n_out = 0;
+foreach ($transactions as $t) {
+    $amt = (float)$t['payment']; $m = method_of($t);
+    if ($t['cash_in'] == 1) { $stats[$m]['in'] += $amt; $stats['total']['in'] += $amt; $n_in++; }
+    else { $stats[$m]['out'] += $amt; $stats['total']['out'] += $amt; $n_out++; }
 }
+$ti = tracking_info($scope);                             // are real cash balances configured?
+$tracked = $ti['any'];
+$day_net = $stats['total']['in'] - $stats['total']['out'];
+$open  = branch_balances($scope, null, $current_date);   // before this day
+$close = branch_balances($scope, $current_date);          // end of this day
 
-$sql = "SELECT t.*, c.name as category_name, u.username as author FROM transactions t LEFT JOIN categories c ON t.category_id = c.id LEFT JOIN users u ON t.user_id = u.id WHERE t.date = :date ORDER BY t.id DESC";
-$stmt = $conn->prepare($sql);
-$stmt->execute([':date' => $current_date]);
-$transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-$cats = $conn->query("SELECT * FROM categories")->fetchAll(PDO::FETCH_ASSOC);
-$employees = $conn->query("SELECT * FROM employees")->fetchAll(PDO::FETCH_ASSOC);
-
-$stats = [
-    'cash' => ['in'=>0, 'out'=>0, 'bal'=>0],
-    'click' => ['in'=>0, 'out'=>0, 'bal'=>0],
-    'bank' => ['in'=>0, 'out'=>0, 'bal'=>0],
-    'total' => ['in'=>0, 'out'=>0, 'bal'=>0]
-];
-
-foreach($transactions as $t) {
-    $amt = $t['payment'];
-    $isIn = $t['cash_in'] == 1;
-    $type = 'cash';
-    if($t['click']) $type = 'click';
-    if($t['bank']) $type = 'bank';
-
-    if($isIn) {
-        $stats[$type]['in'] += $amt;
-        $stats['total']['in'] += $amt;
-        $stats[$type]['bal'] += $amt;
-        $stats['total']['bal'] += $amt;
-    } else {
-        $stats[$type]['out'] += $amt;
-        $stats['total']['out'] += $amt;
-        $stats[$type]['bal'] -= $amt;
-        $stats['total']['bal'] -= $amt;
+// per-branch strip for admin "all branches"
+$by_branch = [];
+if ($all_mode) {
+    foreach (branches_active() as $b) { $by_branch[$b['id']] = ['b' => $b, 'in' => 0, 'out' => 0, 'n' => 0]; }
+    foreach ($transactions as $t) {
+        $bid = (int)$t['branch_id']; if (!isset($by_branch[$bid])) continue;
+        $by_branch[$bid]['n']++; if ($t['cash_in'] == 1) $by_branch[$bid]['in'] += $t['payment']; else $by_branch[$bid]['out'] += $t['payment'];
     }
 }
 
-// Helper: convert URLs in text to clickable links (open in new tab)
-function linkify($text) {
-    $text = htmlspecialchars($text);
-    return preg_replace(
-        '~(https?://[^\s<>\)]+)~i',
-        '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:text-indigo-800 underline underline-offset-2 break-all">$1</a>',
-        $text
-    );
+// form data
+$formBranches = is_admin() ? branches_active() : [];
+$formBranchDefault = $scope ?: (int)(array_key_first($formBranches) ?: 0);
+$cats = db()->query("SELECT * FROM categories ORDER BY name")->fetchAll();
+$emps = db()->query("SELECT id, name, branch_id FROM employees ORDER BY name")->fetchAll();
+if (!is_admin()) {
+    $bid = (int)$me['branch_id'];
+    $cats = array_values(array_filter($cats, function ($c) use ($bid) { return $c['branch_id'] === null || (int)$c['branch_id'] === $bid; }));
+    $emps = array_values(array_filter($emps, function ($c) use ($bid) { return (int)$c['branch_id'] === $bid; }));
 }
+$cats_js = array_map(function ($c) { return ['id' => (int)$c['id'], 'name' => $c['name'], 'type' => $c['type'], 'branch' => $c['branch_id'] === null ? null : (int)$c['branch_id'], 'salary' => is_salary_category($c['name'])]; }, $cats);
+$emps_js = array_map(function ($e) { return ['id' => (int)$e['id'], 'name' => $e['name'], 'branch' => (int)$e['branch_id']]; }, $emps);
+$can_add = $scope ? (bool)branch_get($scope)['is_active'] : (bool)$formBranches;
+
+ui_head('Kunlik hisob');
+ui_start('daily');
 ?>
-<!DOCTYPE html>
-<html lang="uz">
-<head>
-    
-    <title>Dashboard — OXFORD</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>body{font-family:'Plus Jakarta Sans',sans-serif; background-color: #fafafa;}</style>
-</head>
-<body class="text-zinc-800 pb-28">
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Kunlik hisob</h1>
+      <p class="page-sub row row-wrap gap-2" style="gap:8px">
+        <?= ui_scope_chip() ?>
+        <span><?= e(uz_weekday($current_date)) ?>, <?= e(uz_date($current_date)) ?></span>
+        <?php if ($is_today): ?><span class="badge badge-primary">Bugun</span><?php endif; ?>
+      </p>
+    </div>
+    <div class="row gap-2 no-print row-wrap">
+      <form method="get" class="row gap-1" id="dateForm" aria-label="Sanani tanlash">
+        <a class="btn btn-icon" href="?date=<?= e($prev_date) ?>" aria-label="Oldingi kun"><?= icon('chevron-left') ?></a>
+        <input class="input" style="width:auto;min-width:150px;text-align:center;font-weight:700" type="date" name="date" value="<?= e($current_date) ?>" aria-label="Sana" onchange="this.form.submit()">
+        <a class="btn btn-icon" href="?date=<?= e($next_date) ?>" aria-label="Keyingi kun"><?= icon('chevron-right') ?></a>
+      </form>
+      <?php if (!$is_today): ?><a class="btn btn-soft" href="index.php">Bugun</a><?php endif; ?>
+      <?php if ($can_add): ?><button class="btn btn-primary hide-sm" type="button" data-open="#addDialog"><?= icon('plus') ?> Yangi o'tkazma</button><?php endif; ?>
+    </div>
+  </div>
 
-    <nav class="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-zinc-200/60">
-        <div class="max-w-5xl mx-auto px-6 h-16 flex justify-between items-center">
-            <div class="flex items-center gap-3">
-    <img 
-        src="logo.png" 
-        alt="Kaktus Finance Logo" 
-        class="h-8 w-8 rounded-full object-cover border border-zinc-200"
-    >
-    <span class="font-bold text-lg tracking-tight text-zinc-900">OXFORD<span class="text-indigo-600">Bo'zqal'a</span></span>
-    
-    <span class="px-2 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wide <?= $role === 'admin' ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100' ?>">
-        <?= $role ?>
-    </span>
+  <!-- KPI -->
+  <section class="grid g-2 md-g-3" aria-label="Kunlik xulosa">
+    <?php if ($tracked): ?>
+    <div class="card kpi hero2 span-full-m">
+      <div class="kpi-top"><span class="kpi-label">Kassada (kun oxiriga)</span><?= icon('wallet') ?></div>
+      <div class="kpi-value num"><?= e(fmt_signed($close['total'])) ?><small>so'm</small></div>
+      <div class="kpi-foot"><?= count($transactions) ?> ta o'tkazma · kun boshida <b class="num"><?= e(fmt_signed($open['total'])) ?></b><?= $ti['untracked'] ? ' · ' . $ti['untracked'] . " filial hisobga olinmagan" : '' ?></div>
+    </div>
+    <?php else: ?>
+    <div class="card kpi hero2 span-full-m">
+      <div class="kpi-top"><span class="kpi-label">Kun natijasi</span><?= icon('wallet') ?></div>
+      <div class="kpi-value num"><?= e(fmt_signed($day_net)) ?><small>so'm</small></div>
+      <div class="kpi-foot"><?= count($transactions) ?> ta o'tkazma · <?= is_admin() ? '<a href="admin.php#branches" style="text-decoration:underline">Kassa qoldig\'ini sozlash</a>' : "kassa qoldig'i sozlanmagan" ?></div>
+    </div>
+    <?php endif; ?>
+    <div class="card kpi">
+      <div class="kpi-top"><span class="kpi-label">Kirim</span><span class="icon-tile in" style="width:32px;height:32px;border-radius:10px"><?= icon('arrow-down-left', 'i-sm') ?></span></div>
+      <div class="kpi-value num text-in"><?= $stats['total']['in'] > 0 ? '+' : '' ?><?= fmt($stats['total']['in']) ?></div>
+      <div class="kpi-foot"><?= $n_in ?> ta</div>
+    </div>
+    <div class="card kpi">
+      <div class="kpi-top"><span class="kpi-label">Chiqim</span><span class="icon-tile out" style="width:32px;height:32px;border-radius:10px"><?= icon('arrow-up-right', 'i-sm') ?></span></div>
+      <div class="kpi-value num text-out"><?= $stats['total']['out'] > 0 ? '−' : '' ?><?= fmt($stats['total']['out']) ?></div>
+      <div class="kpi-foot"><?= $n_out ?> ta</div>
+    </div>
+  </section>
+
+  <section class="grid g-3 only-mobile" style="margin-top:12px" aria-label="To'lov usullari bo'yicha qoldiq">
+    <?php foreach (['cash', 'click', 'bank'] as $k): $mm = method_meta($k); ?>
+    <div class="card mtile">
+      <span class="mt-top"><span class="dot dot-<?= $k ?>"></span><?= e($mm['label']) ?></span>
+      <?php $tv = $tracked ? $close[$k] : $stats[$k]['in'] - $stats[$k]['out']; ?><span class="mt-val num <?= $tv < 0 ? 'text-out' : '' ?>"><?= e(fmt_signed($tv)) ?></span>
+    </div>
+    <?php endforeach; ?>
+  </section>
+
+  <div class="grid lg-split" style="margin-top:16px">
+    <aside class="lg-aside stack only-desktop">
+      <section class="card" aria-labelledby="mTitle">
+        <div class="card-head"><h2 class="card-title" id="mTitle"><?= icon('chart-pie', 'i-sm') ?> <?= $tracked ? 'Kassa holati' : "To'lov usullari (kun)" ?></h2></div>
+        <div class="card-pad stack">
+          <?php $turn = 0; foreach (['cash', 'click', 'bank'] as $k) $turn += $stats[$k]['in'] + $stats[$k]['out'];
+          if ($turn > 0): ?>
+          <div class="segbar" role="img" aria-label="Bugungi aylanma ulushi">
+            <?php foreach (['cash', 'click', 'bank'] as $k): $v = $stats[$k]['in'] + $stats[$k]['out']; if ($v <= 0) continue; ?><i class="<?= $k ?>" style="flex:<?= $v ?>"></i><?php endforeach; ?>
+          </div>
+          <?php endif; ?>
+          <?php foreach (['cash', 'click', 'bank'] as $k): $mm = method_meta($k); $s = $stats[$k]; ?>
+          <div class="row">
+            <span class="icon-tile badge-<?= $k ?>" style="width:38px;height:38px"><?= icon($mm['icon'], 'i-sm') ?></span>
+            <div class="grow">
+              <div class="fw-7"><?= e($mm['label']) ?></div>
+              <div class="fs-xs text-3 num">+<?= fmt($s['in']) ?> · −<?= fmt($s['out']) ?></div>
+            </div>
+            <?php $tv = $tracked ? $close[$k] : $s['in'] - $s['out']; ?><div class="fw-8 num <?= $tv < 0 ? 'text-out' : '' ?>"><?= e(fmt_signed($tv)) ?></div>
+          </div>
+          <?php endforeach; ?>
+          <div class="row between" style="border-top:1px solid var(--border);padding-top:14px">
+            <span class="fw-7"><?= $tracked ? 'Jami qoldiq' : 'Kun natijasi' ?></span>
+            <span class="fw-8 num text-primary" style="font-size:18px"><?= e(fmt_signed($tracked ? $close['total'] : $day_net)) ?></span>
+          </div>
+          <?php if ($scope && $is_today && $tracked && (is_admin() || is_manager())): ?><a class="btn btn-soft btn-block" href="kassa.php"><?= icon('calculator', 'i-sm') ?> Kassani sanash</a><?php endif; ?>
+        </div>
+      </section>
+      <?php if ($all_mode && $by_branch): ?>
+      <section class="card" aria-labelledby="bbTitle">
+        <div class="card-head"><h2 class="card-title" id="bbTitle"><?= icon('store', 'i-sm') ?> Filiallar kesimida</h2></div>
+        <div class="list">
+          <?php foreach ($by_branch as $r): ?>
+          <a class="tx" href="process.php?action=switch_branch&id=<?= (int)$r['b']['id'] ?>&back=<?= ui_back_param() ?>" style="padding-top:12px;padding-bottom:12px;align-items:center">
+            <?= branch_avatar($r['b'], 'sm') ?>
+            <div class="tx-main"><div class="fw-7 fs-md"><?= e($r['b']['name']) ?></div><div class="fs-xs text-3 num">+<?= fmt($r['in']) ?> · −<?= fmt($r['out']) ?></div></div>
+            <div class="fw-8 num <?= ($r['in'] - $r['out']) < 0 ? 'text-out' : '' ?>"><?= e(fmt_signed($r['in'] - $r['out'])) ?></div>
+          </a>
+          <?php endforeach; ?>
+        </div>
+      </section>
+      <?php endif; ?>
+    </aside>
+
+    <section class="card clip" aria-labelledby="lTitle">
+      <div class="card-head" style="flex-wrap:wrap">
+        <h2 class="card-title" id="lTitle"><?= icon('list', 'i-sm') ?> O'tkazmalar <span class="badge"><?= count($transactions) ?></span></h2>
+        <?php if (count($transactions) > 0): ?>
+        <div class="seg no-print" role="group" aria-label="Turi bo'yicha filtr" data-filter-type="#txList">
+          <button type="button" class="on" data-type="all" aria-pressed="true">Hammasi</button>
+          <button type="button" data-type="in" aria-pressed="false">Kirim</button>
+          <button type="button" data-type="out" aria-pressed="false">Chiqim</button>
+        </div>
+        <?php endif; ?>
+      </div>
+      <?php if (count($transactions) > 3): ?>
+      <div class="card-pad no-print" style="padding-bottom:12px">
+        <div class="input-icon"><?= icon('search') ?><input class="input input-sm" style="padding-left:42px" type="search" placeholder="Qidirish…" aria-label="Qidirish" data-filter-list="#txList" data-filter-empty="#txNone"></div>
+      </div>
+      <?php endif; ?>
+
+      <div class="list" id="txList" data-type="all">
+        <?php foreach ($transactions as $row):
+            $is_in = $row['cash_in'] == 1; $m = method_of($row); $mm = method_meta($m);
+            $title = $row['category_name'] ?: ($is_in ? 'Kirim' : 'Chiqim');
+            $time = local_time($row['created_at']); $rb = (int)$row['branch_id'];
+            $canE = can_edit_tx($rb); $canD = can_delete_tx($rb);
+            $search = mb_strtolower($title . ' ' . $row['comment'] . ' ' . $row['author'] . ' ' . $mm['label'] . ' ' . (int)$row['payment'] . ' ' . $row['branch_name']);
+        ?>
+        <article class="tx" data-search="<?= e($search) ?>" data-type="<?= $is_in ? 'in' : 'out' ?>">
+          <span class="icon-tile <?= $is_in ? 'in' : 'out' ?>"><?= icon($is_in ? 'arrow-down-left' : 'arrow-up-right') ?></span>
+          <div class="tx-main">
+            <div class="row between" style="align-items:flex-start;gap:8px">
+              <h3 class="tx-title"><?= e($title) ?></h3>
+              <div class="tx-amt num <?= $is_in ? 'text-in' : 'text-out' ?>"><?= $is_in ? '+' : '−' ?><?= fmt($row['payment']) ?></div>
+            </div>
+            <div class="tx-meta">
+              <?php if ($all_mode): ?><span class="row gap-1" style="gap:5px"><?= branch_avatar(branch_get($rb), 'xs') ?><b class="text-2"><?= e($row['branch_name']) ?></b></span><?php endif; ?>
+              <span class="badge badge-<?= $m ?>"><?= icon($mm['icon'], 'i-xs') ?><?= e($mm['label']) ?></span>
+              <?php if (!empty($row['proof'])): $pk = proof_info($row['proof'])['kind']; ?><button type="button" class="badge badge-proof ok" <?= proof_attrs($row) ?> title="To'lov isbotini ko'rish"><?= icon($pk === 'image' ? 'image' : 'file-text', 'i-xs') ?><?= $pk === 'image' ? 'Skrinshot' : ($pk === 'pdf' ? 'PDF' : 'Fayl') ?></button>
+              <?php elseif (proof_is_missing($row)): ?><span class="badge badge-proof miss" title="Click/Bank to'lovi uchun isbot biriktirilmagan"><?= icon('image-off', 'i-xs') ?>Isbotsiz</span><?php endif; ?>
+              <?php if ($row['is_modified']): ?><span class="badge badge-warn">Tahrirlangan</span><?php endif; ?>
+              <?php if ($row['author']): ?><span><?= e($row['author']) ?></span><?php endif; ?>
+              <?php if ($time): ?><span class="num"><?= e($time) ?></span><?php endif; ?>
+            </div>
+            <?php if (trim((string)$row['comment']) !== ''): ?><p class="tx-note"><?= linkify($row['comment']) ?></p><?php endif; ?>
+          </div>
+          <div class="tx-side no-print">
+            <button type="button" class="btn btn-ghost btn-icon btn-sm" data-menu="#menu<?= (int)$row['id'] ?>" aria-haspopup="menu" aria-expanded="false" aria-label="Amallar"><?= icon('ellipsis-vertical') ?></button>
+            <template id="menu<?= (int)$row['id'] ?>">
+              <?php if (!empty($row['proof'])): ?><a href="proof.php?id=<?= (int)$row['id'] ?>" <?= proof_attrs($row) ?> role="menuitem"><?= icon('image', 'i-sm') ?> Isbotni ko'rish</a>
+              <?php elseif (($row['click'] || $row['bank']) && ($canE || is_admin() || is_manager() || (int)$row['user_id'] === (int)$me['id'])): ?><button type="button" role="menuitem" data-attach-proof="<?= (int)$row['id'] ?>"><?= icon('image-plus', 'i-sm') ?> Isbot qo'shish</button><?php endif; ?>
+              <a href="view_history.php?id=<?= (int)$row['id'] ?>" role="menuitem"><?= icon('history', 'i-sm') ?> O'zgarishlar tarixi</a>
+              <?php if ($canE): ?><a href="edit_transaction.php?id=<?= (int)$row['id'] ?>" role="menuitem"><?= icon('pencil', 'i-sm') ?> Tahrirlash</a><?php endif; ?>
+              <?php if ($canD): ?>
+                <hr>
+                <a class="danger" role="menuitem" data-post href="process.php?action=delete_transaction&id=<?= (int)$row['id'] ?>" data-confirm="<?= e(($is_in ? '+' : '−') . fmt($row['payment']) . " so'mlik tranzaksiya o'chiriladi. Bu amal jurnalga yoziladi.") ?>" data-confirm-title="Tranzaksiyani o'chirasizmi?" data-confirm-ok="O'chirish"><?= icon('trash-2', 'i-sm') ?> O'chirish</a>
+              <?php endif; ?>
+            </template>
+          </div>
+        </article>
+        <?php endforeach; ?>
+      </div>
+
+      <div class="empty" id="txNone" <?= count($transactions) > 0 ? 'hidden' : '' ?>>
+        <div class="icon-tile"><?= icon('inbox', 'i-lg') ?></div>
+        <b><?= count($transactions) > 0 ? 'Hech narsa topilmadi' : ($is_today ? "Bugun hali o'tkazma yo'q" : "Bu kunda o'tkazma yo'q") ?></b>
+        <span class="fs-sm"><?= count($transactions) > 0 ? "Qidiruv yoki filtrni o'zgartirib ko'ring." : ($can_add ? "Yangi o'tkazma qo'shish uchun «+» tugmasini bosing." : "") ?></span>
+        <?php if (count($transactions) === 0 && $can_add): ?>
+          <div class="mt-4"><button class="btn btn-primary" type="button" data-open="#addDialog"><?= icon('plus') ?> Yangi o'tkazma</button></div>
+        <?php endif; ?>
+      </div>
+    </section>
+  </div>
 </div>
-            <div class="flex items-center gap-5">
-                <?php if($role === 'admin'): ?>
-                    <a href="hisobot.php" class="text-sm font-medium text-zinc-500 hover:text-indigo-600 flex items-center gap-1.5 transition-colors">
-                        <i data-lucide="bar-chart-2" class="w-4 h-4"></i> Hisobotlar
-                    </a>
-                    <a href="admin.php" class="text-sm font-medium text-zinc-500 hover:text-indigo-600 flex items-center gap-1.5 transition-colors">
-                        <i data-lucide="settings" class="w-4 h-4"></i> Admin
-                    </a>
-                <?php endif; ?>
-                <a href="?logout=true" class="text-zinc-400 hover:text-rose-500 transition-colors"><i data-lucide="log-out" class="w-5 h-5"></i></a>
-            </div>
-        </div>
-    </nav>
 
-    <div class="max-w-5xl mx-auto px-6 py-8 space-y-8">
-        
-        <div class="flex justify-center">
-            <div class="inline-flex items-center gap-4 bg-white p-1.5 rounded-2xl shadow-sm border border-zinc-200">
-                <button onclick="changeDate(-1)" class="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-zinc-50 text-zinc-500 transition"><i data-lucide="chevron-left" class="w-5 h-5"></i></button>
-                <input type="date" id="datePicker" value="<?= $current_date ?>" class="bg-transparent border-none font-bold text-lg text-zinc-800 outline-none cursor-pointer text-center" onchange="window.location.href='?date='+this.value">
-                <button onclick="changeDate(1)" class="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-zinc-50 text-zinc-500 transition"><i data-lucide="chevron-right" class="w-5 h-5"></i></button>
-            </div>
-        </div>
+<?php
+$fab = $can_add ? '<button class="fab no-print" type="button" data-open="#addDialog" aria-label="Yangi o\'tkazma qo\'shish">' . icon('plus') . '</button>' : '';
+$proofReq = proof_required((int)($scope ?: ($me['branch_id'] ?? 0)));   // cashiers must attach a screenshot for Click/Bank
 
-        <div class="bg-white rounded-3xl shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07),0_10px_20px_-2px_rgba(0,0,0,0.04)] border border-zinc-100 overflow-hidden">
-            <div class="px-8 py-5 border-b border-zinc-100 flex justify-between items-center bg-zinc-50/30">
-                <h3 class="font-bold text-zinc-800 flex items-center gap-2"><i data-lucide="list" class="w-4 h-4 text-zinc-400"></i> Kunlik O'tkazmalar</h3>
-                <span class="text-xs font-semibold bg-white border border-zinc-200 text-zinc-500 px-2.5 py-1 rounded-lg"><?= count($transactions) ?> ta</span>
-            </div>
-            
-            <div class="divide-y divide-zinc-50 min-h-[300px]">
-                <?php if(count($transactions) > 0): ?>
-                    <?php foreach($transactions as $row):
-                        $is_in = $row['cash_in'];
-                        $color = $is_in ? 'text-emerald-600' : 'text-rose-600';
-                        $sign  = $is_in ? '+' : '-';
-                        // Payment method badge styles
-                        if ($row['bank'])       { $m_label='Bank';  $m_bg='bg-purple-100'; $m_text='text-purple-700'; $m_border='border-purple-200'; $m_icon='building-2'; }
-                        elseif ($row['click'])  { $m_label='Click'; $m_bg='bg-blue-100';   $m_text='text-blue-700';   $m_border='border-blue-200';   $m_icon='smartphone'; }
-                        else                    { $m_label='Naqd';  $m_bg='bg-amber-100';  $m_text='text-amber-700';  $m_border='border-amber-200';  $m_icon='banknote'; }
-                    ?>
-                    <div class="px-6 py-4 hover:bg-zinc-50/80 transition-colors group border-l-4 <?= $is_in ? 'border-l-emerald-400' : 'border-l-rose-300' ?>">
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-4">
-                                <!-- Type icon -->
-                                <div class="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 <?= $is_in ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-rose-50 text-rose-500 border border-rose-100' ?>">
-                                    <i data-lucide="<?= $is_in ? 'arrow-down-left' : 'arrow-up-right' ?>" class="w-5 h-5"></i>
-                                </div>
-                                <!-- Badges & Author -->
-                                <div>
-                                    <div class="flex items-center gap-2 flex-wrap">
-                                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold <?= $m_bg ?> <?= $m_text ?> border <?= $m_border ?>">
-                                            <i data-lucide="<?= $m_icon ?>" class="w-3 h-3"></i><?= $m_label ?>
-                                        </span>
-                                        <?php if($row['is_modified']): ?>
-                                            <span class="text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-lg border border-amber-200">Tahrirlangan</span>
-                                        <?php endif; ?>
-                                        <?php if($row['category_name']): ?>
-                                            <span class="text-[11px] font-medium text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded-full"><?= htmlspecialchars($row['category_name']) ?></span>
-                                        <?php endif; ?>
-                                    </div>
-                                    <?php if($row['author']): ?>
-                                        <span class="text-[11px] font-medium text-zinc-400 mt-0.5 block"><?= htmlspecialchars($row['author']) ?></span>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                            <div class="flex items-center gap-3 flex-shrink-0 ml-4">
-                                <div class="font-bold <?= $color ?> text-base tracking-tight whitespace-nowrap"><?= $sign . number_format($row['payment'], 0, '.', ' ') ?></div>
-                                <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <a href="view_history.php?id=<?= $row['id'] ?>" class="text-zinc-300 hover:text-indigo-500 transition-colors"><i data-lucide="history" class="w-4 h-4"></i></a>
-                                    <?php if($can_edit): ?>
-                                        <a href="edit_transaction.php?id=<?= $row['id'] ?>" class="text-zinc-300 hover:text-blue-500 transition-colors"><i data-lucide="pencil" class="w-4 h-4"></i></a>
-                                    <?php endif; ?>
-                                    <?php if($can_delete): ?>
-                                        <a href="process.php?action=delete_transaction&id=<?= $row['id'] ?>" onclick="return confirm('O\'chirilsinmi?')" class="text-zinc-300 hover:text-rose-500 transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></a>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                        </div>
-                        <?php if($row['comment']): ?>
-                            <div class="mt-2 ml-14 text-[12px] text-zinc-500 italic leading-relaxed break-words"><?= linkify($row['comment']) ?></div>
-                        <?php endif; ?>
-                    </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-20">
-                        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-zinc-50 text-zinc-300 mb-4"><i data-lucide="inbox" class="w-8 h-8"></i></div>
-                        <p class="text-zinc-400 font-medium text-sm">Bugun uchun o'tkazmalar mavjud emas.</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-
-            <div class="bg-zinc-50/80 border-t border-zinc-100 p-8">
-                <div class="flex items-center gap-2 mb-6">
-                    <div class="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg"><i data-lucide="pie-chart" class="w-4 h-4"></i></div>
-                    <h4 class="text-sm font-bold text-zinc-700 uppercase tracking-wide">Moliyaviy Statistika (<?= $current_date ?>)</h4>
-                </div>
-
-                <div class="overflow-hidden rounded-xl border border-zinc-200">
-                    <table class="w-full text-sm text-left">
-                        <thead class="bg-zinc-100 text-xs font-bold uppercase text-zinc-500">
-                            <tr>
-                                <th class="px-6 py-3">Usul</th>
-                                <th class="px-6 py-3 text-emerald-600">Kirim</th>
-                                <th class="px-6 py-3 text-rose-600">Chiqim</th>
-                                <th class="px-6 py-3 text-indigo-600">Qoldiq</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-zinc-200 bg-white">
-                            <tr>
-                                <td class="px-6 py-3 font-bold text-zinc-700">Naqd</td>
-                                <td class="px-6 py-3 text-emerald-600 font-medium"><?= number_format($stats['cash']['in'], 0, '.', ' ') ?></td>
-                                <td class="px-6 py-3 text-rose-600 font-medium"><?= number_format($stats['cash']['out'], 0, '.', ' ') ?></td>
-                                <td class="px-6 py-3 font-bold text-zinc-800"><?= number_format($stats['cash']['bal'], 0, '.', ' ') ?></td>
-                            </tr>
-                            <tr>
-                                <td class="px-6 py-3 font-bold text-zinc-700">Click</td>
-                                <td class="px-6 py-3 text-emerald-600 font-medium"><?= number_format($stats['click']['in'], 0, '.', ' ') ?></td>
-                                <td class="px-6 py-3 text-rose-600 font-medium"><?= number_format($stats['click']['out'], 0, '.', ' ') ?></td>
-                                <td class="px-6 py-3 font-bold text-zinc-800"><?= number_format($stats['click']['bal'], 0, '.', ' ') ?></td>
-                            </tr>
-                            <tr>
-                                <td class="px-6 py-3 font-bold text-zinc-700">Bank</td>
-                                <td class="px-6 py-3 text-emerald-600 font-medium"><?= number_format($stats['bank']['in'], 0, '.', ' ') ?></td>
-                                <td class="px-6 py-3 text-rose-600 font-medium"><?= number_format($stats['bank']['out'], 0, '.', ' ') ?></td>
-                                <td class="px-6 py-3 font-bold text-zinc-800"><?= number_format($stats['bank']['bal'], 0, '.', ' ') ?></td>
-                            </tr>
-                            <tr class="bg-zinc-50 border-t border-zinc-200">
-                                <td class="px-6 py-4 font-bold text-zinc-900 uppercase text-xs">Jami</td>
-                                <td class="px-6 py-4 font-bold text-emerald-700 text-lg"><?= number_format($stats['total']['in'], 0, '.', ' ') ?></td>
-                                <td class="px-6 py-4 font-bold text-rose-700 text-lg"><?= number_format($stats['total']['out'], 0, '.', ' ') ?></td>
-                                <td class="px-6 py-4 font-bold text-indigo-700 text-lg"><?= number_format($stats['total']['bal'], 0, '.', ' ') ?></td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+ob_start(); if ($can_add): ?>
+<dialog class="modal" id="addDialog" aria-labelledby="addTitle">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2 class="modal-title" id="addTitle">Yangi o'tkazma</h2>
+      <button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Yopish"><?= icon('x') ?></button>
     </div>
+    <form action="process.php" method="post" enctype="multipart/form-data" class="stack" id="addForm" data-loading>
+      <?= csrf_field() ?>
+      <input type="hidden" name="action" value="add_transaction">
 
-    <button onclick="openModal()" class="fixed bottom-10 right-10 w-16 h-16 bg-indigo-600 text-white rounded-2xl shadow-[0_8px_30px_rgb(79,70,229,0.3)] flex items-center justify-center hover:scale-105 transition-transform hover:bg-indigo-700"><i data-lucide="plus" class="w-8 h-8"></i></button>
+      <?php if ($all_mode): ?>
+      <div class="field">
+        <label class="label" for="branchSel">Filial</label>
+        <select class="select" name="branch_id" id="branchSel">
+          <?php foreach ($formBranches as $b): ?><option value="<?= (int)$b['id'] ?>" <?= (int)$b['id'] === $formBranchDefault ? 'selected' : '' ?>><?= e($b['name']) ?></option><?php endforeach; ?>
+        </select>
+      </div>
+      <?php else: ?>
+      <input type="hidden" name="branch_id" id="branchSel" value="<?= (int)($scope ?: $me['branch_id']) ?>">
+      <?php endif; ?>
 
-    <div id="addModal" class="fixed inset-0 z-50 hidden transition-all duration-200">
-        <div class="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm" onclick="closeModal()"></div>
-        <div class="fixed inset-0 flex items-center justify-center p-4">
-            <div class="bg-white w-full max-w-md p-8 rounded-3xl shadow-2xl border border-zinc-100 transform scale-100 transition-all">
-                <div class="flex justify-between items-center mb-6">
-                    <h3 class="font-bold text-xl text-zinc-800">Yangi O'tkazma</h3>
-                    <button onclick="closeModal()" class="text-zinc-400 hover:text-zinc-600 transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
-                </div>
-                <form action="process.php" method="post" class="space-y-5">
-                    <input type="hidden" name="action" value="add_transaction">
-                    
-                    <div>
-                        <input type="text" name="payment" id="paymentInput" placeholder="0" class="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl font-bold text-2xl text-zinc-800 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-center" required autocomplete="off">
-                        <p class="text-center text-xs text-zinc-400 mt-2 font-medium uppercase tracking-wide">Summani kiriting</p>
-                    </div>
+      <div class="seg seg-block" role="radiogroup" aria-label="Turi">
+        <label class="is-in"><input type="radio" name="type" value="income" checked> <?= icon('arrow-down-left', 'i-sm') ?> Kirim</label>
+        <label class="is-out"><input type="radio" name="type" value="expense"> <?= icon('arrow-up-right', 'i-sm') ?> Chiqim</label>
+      </div>
 
-                    <div class="grid grid-cols-2 gap-3">
-                        <select name="type" class="p-3 bg-white border border-zinc-200 rounded-xl text-sm font-semibold text-zinc-600 outline-none focus:border-indigo-500" onchange="filterCats(this.value)">
-                            <option value="income">Kirim (+)</option>
-                            <option value="expense">Chiqim (-)</option>
-                        </select>
-                        <select name="method" class="p-3 bg-white border border-zinc-200 rounded-xl text-sm font-semibold text-zinc-600 outline-none focus:border-indigo-500">
-                            <option value="cash">Naqd</option>
-                            <option value="click">Click</option>
-                            <option value="bank">Bank</option>
-                        </select>
-                    </div>
-
-                    <div class="space-y-2">
-                        <label class="text-xs font-bold text-zinc-400 uppercase ml-1">Kategoriya</label>
-                        <select name="category_id" id="catSelect" class="w-full p-3.5 bg-white border border-zinc-200 rounded-xl text-sm font-medium outline-none focus:border-indigo-500" onchange="checkSalary(this)">
-                            <?php foreach($cats as $c): ?>
-                                <option value="<?= $c['id'] ?>" data-type="<?= $c['type'] ?>" data-name="<?= strtolower($c['name']) ?>"><?= $c['name'] ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-
-                    <div id="empSelectDiv" class="hidden space-y-2 animate-fade-in">
-                        <label class="text-xs font-bold text-zinc-400 uppercase ml-1">Xodimni tanlang</label>
-                        <select name="employee_id" class="w-full p-3.5 bg-white border border-zinc-200 rounded-xl text-sm font-medium outline-none focus:border-indigo-500">
-                            <option value="">-- Tanlang --</option>
-                            <?php foreach($employees as $e): ?>
-                                <option value="<?= $e['id'] ?>"><?= $e['name'] ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-
-                    <div class="space-y-2">
-                        <label class="text-xs font-bold text-zinc-400 uppercase ml-1">Izoh</label>
-                        <textarea name="comment" id="commentInput" rows="4" placeholder="Izoh yozing... (URL qo'shsangiz, avtomatik link bo'ladi)" class="w-full p-4 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all resize-none leading-relaxed" oninput="this.style.height='auto'; this.style.height=this.scrollHeight+'px';"></textarea>
-                    </div>
-                    
-                    <button type="submit" class="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all">Saqlash</button>
-                </form>
-            </div>
+      <div class="field">
+        <label class="label sr-only" for="paymentInput">Summa</label>
+        <div class="money-field">
+          <input class="input" type="text" inputmode="numeric" name="payment" id="paymentInput" placeholder="0" autocomplete="off" data-money required>
+          <span class="unit">so'm</span>
         </div>
-    </div>
+      </div>
 
-    <script>
-        lucide.createIcons();
-        function changeDate(d) { let date = new Date(document.getElementById('datePicker').value); date.setDate(date.getDate()+d); window.location.href='?date='+date.toISOString().split('T')[0]; }
-        function openModal() { document.getElementById('addModal').classList.remove('hidden'); document.getElementById('paymentInput').focus(); }
-        function closeModal() { document.getElementById('addModal').classList.add('hidden'); }
-        document.addEventListener('keydown', e => { if(e.key === "Escape") closeModal(); });
-        
-        const payInput = document.getElementById('paymentInput');
-        payInput.addEventListener('input', function(e) {
-            let val = this.value.replace(/\D/g, '');
-            this.value = val ? parseInt(val).toLocaleString('ru-RU').replace(/,/g, ' ') : '';
-        });
+      <div class="field">
+        <span class="label">To'lov usuli</span>
+        <div class="method-pick" role="radiogroup" aria-label="To'lov usuli">
+          <?php foreach (['cash', 'click', 'bank'] as $k): $mm = method_meta($k); ?>
+          <label><input type="radio" name="method" value="<?= $k ?>" <?= $k === 'cash' ? 'checked' : '' ?>><?= icon($mm['icon']) ?><?= e($mm['label']) ?></label>
+          <?php endforeach; ?>
+        </div>
+      </div>
 
-        function filterCats(type) {
-            const opts = document.querySelectorAll('#catSelect option');
-            opts.forEach(o => o.style.display = (o.dataset.type === type) ? 'block' : 'none');
-            const first = document.querySelector(`#catSelect option[data-type="${type}"]`);
-            if(first) { first.selected = true; checkSalary(first.parentNode); }
-        }
-        
-        function checkSalary(select) {
-            const opt = select.options[select.selectedIndex];
-            const name = opt ? opt.getAttribute('data-name') : '';
-            const div = document.getElementById('empSelectDiv');
-            if(name && (name.includes('salary') || name.includes('oylik') || name.includes('maosh'))) {
-                div.classList.remove('hidden');
-            } else {
-                div.classList.add('hidden');
-            }
-        }
-        filterCats('income');
-    </script>
-</body>
-</html>
+      <div class="field" id="proofField" hidden>
+        <span class="label">To'lov isboti <?= $proofReq ? '<span class="req">*</span>' : '<span class="text-3 fw-5">(tavsiya etiladi)</span>' ?></span>
+        <?= ui_proof_drop($proofReq, 'proof', 'proofBox') ?>
+        <span class="hint">Skrinshot, PDF yoki boshqa hujjat — Click/Bank o'tkazmasi haqiqatan kelib tushganini keyin tekshirish uchun.</span>
+      </div>
+
+      <div class="field">
+        <label class="label" for="catSelect">Kategoriya</label>
+        <select class="select" name="category_id" id="catSelect"></select>
+      </div>
+
+      <div class="field" id="empField" hidden>
+        <label class="label" for="empSelect">Xodim</label>
+        <select class="select" name="employee_id" id="empSelect"></select>
+      </div>
+
+      <div class="field">
+        <label class="label" for="commentInput">Izoh <span class="text-3 fw-5">(ixtiyoriy)</span></label>
+        <textarea class="textarea" name="comment" id="commentInput" rows="2" placeholder="Izoh yozing… (havola qo'shsangiz, bosiladigan bo'ladi)" data-autogrow></textarea>
+      </div>
+
+      <?php if (is_admin() || is_manager()): ?>
+      <div class="field">
+        <label class="label" for="dateInput">Sana</label>
+        <input class="input" type="date" name="date" id="dateInput" value="<?= e($is_today ? $today : $current_date) ?>" max="<?= e($today) ?>">
+      </div>
+      <?php endif; ?>
+
+      <button type="submit" class="btn btn-primary btn-lg btn-block">Saqlash</button>
+      <?php if (!is_admin() && !is_manager()): ?><p class="hint center" style="margin-top:-4px">Bugungi sana (<?= e(uz_date($today, false)) ?>) bilan saqlanadi</p><?php endif; ?>
+    </form>
+  </div>
+</dialog>
+<?php endif; ?>
+<dialog class="modal" id="attachDialog" aria-labelledby="apTitle">
+  <div class="modal-box">
+    <div class="modal-head"><h2 class="modal-title" id="apTitle">Isbot qo'shish</h2><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Yopish"><?= icon('x') ?></button></div>
+    <form action="process.php" method="post" enctype="multipart/form-data" class="stack" id="attachForm" data-loading>
+      <?= csrf_field() ?><input type="hidden" name="action" value="attach_proof"><input type="hidden" name="id" id="apId">
+      <?= ui_proof_drop(true, 'proof', 'apBox') ?>
+      <p class="hint">To'lov (Click/Bank) o'tkazilganini tasdiqlovchi rasm yoki PDF/hujjat. Qo'shilgach kassir uni almashtira olmaydi.</p>
+      <button type="submit" class="btn btn-primary btn-lg btn-block">Biriktirish</button>
+    </form>
+  </div>
+</dialog>
+<?php
+$dialog = ob_get_clean();
+
+$script = $can_add ? '<script>
+(function(){
+  var CATS = ' . json_encode($cats_js, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) . ', EMPS = ' . json_encode($emps_js, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) . ';
+  var form = document.getElementById("addForm"), sel = document.getElementById("catSelect"), emp = document.getElementById("empField"), empSel = document.getElementById("empSelect"), br = document.getElementById("branchSel");
+  function curType(){ return form.querySelector("input[name=type]:checked").value; }
+  function curBranch(){ return parseInt(br.value, 10) || 0; }
+  function opt(v, t){ var o = document.createElement("option"); o.value = v; o.textContent = t; return o; }
+  function fill(){
+    var t = curType(), b = curBranch(); sel.innerHTML = "";
+    var list = CATS.filter(function(c){ return c.type === t && (c.branch === null || c.branch === b); });
+    if(!list.length) sel.appendChild(opt("", "Kategoriya yo‘q (Admin → Kategoriyalar)"));
+    list.forEach(function(c){ var o = opt(c.id, c.name); o.dataset.salary = c.salary ? "1" : ""; sel.appendChild(o); });
+    empSel.innerHTML = ""; empSel.appendChild(opt("", "— Tanlang —"));
+    EMPS.filter(function(e){ return e.branch === b; }).forEach(function(e){ empSel.appendChild(opt(e.id, e.name)); });
+    check();
+  }
+  function check(){ var o = sel.options[sel.selectedIndex]; emp.hidden = !(o && o.dataset.salary) || empSel.options.length < 2; }
+  form.querySelectorAll("input[name=type]").forEach(function(r){ r.addEventListener("change", fill); });
+  br.addEventListener("change", fill); sel.addEventListener("change", check);
+  form.addEventListener("submit", function(e){
+    var v = document.getElementById("paymentInput").value.replace(/\D/g,"");
+    if(!v || +v <= 0){ e.preventDefault(); toast("Summani kiriting","error"); document.getElementById("paymentInput").focus(); }
+  });
+  var pf = document.getElementById("proofField"), pbox = document.getElementById("proofBox");
+  function methodChange(){ var m = form.querySelector("input[name=method]:checked").value; pf.hidden = (m === "cash"); if (m === "cash" && pbox.reset) pbox.reset(); }
+  form.querySelectorAll("input[name=method]").forEach(function(r){ r.addEventListener("change", methodChange); });
+  document.getElementById("addDialog").addEventListener("close", function(){ form.reset(); if (pbox.reset) pbox.reset(); fill(); methodChange(); });
+  document.addEventListener("keydown", function(e){
+    if((e.key==="n"||e.key==="N") && !e.ctrlKey && !e.metaKey && !e.altKey && !/INPUT|TEXTAREA|SELECT/.test((document.activeElement||{}).tagName||"") && !document.querySelector("dialog[open]")){ e.preventDefault(); openDialog(document.getElementById("addDialog")); }
+  });
+  fill();
+})();
+</script>' : '';
+
+$script .= '<script>(function(){
+  document.addEventListener("click", function(e){
+    var b = e.target.closest("[data-attach-proof]"); if(!b) return;
+    document.getElementById("apId").value = b.getAttribute("data-attach-proof");
+    var z = document.getElementById("apBox"); if (z && z.reset) z.reset();
+    openDialog(document.getElementById("attachDialog"));
+  });
+})();</script>';
+
+ui_end(['active' => 'daily', 'after' => $fab . $dialog, 'scripts' => $script]);
