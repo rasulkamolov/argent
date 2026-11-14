@@ -58,7 +58,7 @@ class LcupClient {
         if ($method !== 'GET') {
             $okPost = $method === 'POST' && isset(LCUP_LW_ALLOWED[$purpose]) && preg_match('~/livewire/message/[\w.\-]+$~', $url)
                 && ($purpose === 'login' ? (bool)preg_match('~/livewire/message/[\w.\-]*login[\w.\-]*$~i', $url)
-                    : ($purpose === 'history' ? (lcup_setting('history_via_livewire') === '1' && (bool)preg_match('~/livewire/message/students\.history-livewire$~', $url)) : lcup_setting('allow_switch_post') === '1'));
+                    : ($purpose === 'history' ? (bool)preg_match('~/livewire/message/students\.history-livewire$~', $url) : true));
             if (!$okPost) { lcup_reqlog('REFUSED', (string)parse_url($url, PHP_URL_PATH), $purpose ?: $method, $method . ' ruxsat etilmagan', 0, 0); throw new LcupError("Faqat-o'qish qoidasi: bu so'rov ($method) taqiqlangan.", 'config'); }
         }
         $host = parse_url($url, PHP_URL_HOST);
@@ -125,7 +125,7 @@ class LcupClient {
     /** Logs in through the Livewire login component. Throws LcupError('login'|'config'|...) with a clear message. */
     public function login(): void {
         $phone = (string)cfg('LCUP_PHONE', ''); $pass = (string)cfg('LCUP_PASSWORD', '');
-        if ($phone === '' || $pass === '') throw new LcupError("LCUP_PHONE / LCUP_PASSWORD argent_private/config.php da to'ldirilmagan.", 'config');
+        if ($phone === '' || $pass === '') throw new LcupError("LC-UP telefon / parol kiritilmagan (Admin → Sozlamalar → LC-UP monitoring).", 'config');
         $until = lcup_state_get('login_backoff_until');
         if ($until && time() < (int)$until) throw new LcupError("Login vaqtincha to'xtatilgan (blokirovkadan saqlanish uchun): oxirgi xato — " . lcup_state_get('login_last_error', '?') . ". Keyingi urinish " . date('H:i', (int)$until) . " da.", 'login');
         $fmt = (string)cfg('LCUP_PHONE_FORMAT', 'mask');
@@ -220,8 +220,8 @@ class LcupClient {
     /**
      * Makes the mapped LC-UP branch active and returns the verified HTML of $probePath for it.
      * LC-UP's dropdown is a Livewire <select wire:model="filial_id" wire:change="change_filial"> that initially lists ONLY the current
-     * branch; the others are loaded by a "renderFilials" call. Switching is therefore a (view-state) POST, which this client
-     * performs only when the admin ticked "allow_switch_post" — and only with these three names taken from the page itself.
+     * branch; the others are loaded by a "renderFilials" call. Switching is therefore a (view-state) POST, sent only with these
+     * whitelisted names (lcup_policy.php: filial_id / renderFilials / change_filial) taken from the page itself.
      */
     public function switch_branch(string $key, string $name, string $probePath): string {
         $r = $this->page($probePath); $html = $r['body'];
@@ -235,11 +235,7 @@ class LcupClient {
         };
         $this->resolved_key = $key !== '' ? $key : null;
         if ($isTarget($html)) { if ($key === '' && !empty($sel['current'])) $this->resolved_key = (string)$sel['current']; return $html; }
-        if (lcup_setting('allow_switch_post') !== '1')
-            throw new LcupError("«" . ($name ?: $key) . "» filialini ochish uchun LC-UP dagi filial tanlagichga so'rov (POST) yuborish kerak. «Faqat-o'qish» qoidasi tufayli yuborilmadi. Admin → LC-UP da «Filialni almashtirishga ruxsat» ni yoqing (u faqat joriy filialni almashtiradi, ma'lumotni o'zgartirmaydi), yoki har bir filial uchun alohida LC-UP akkaunti ishlating.", 'branch');
-        $tpl = trim((string)lcup_setting('switch_url'));
-        if ($tpl !== '' && $key !== '') { $u = str_replace('{id}', rawurlencode($key), $tpl); $this->get($u[0] === '?' ? $probePath . $u : $u); }
-        else {
+        {
             if ($sel['mode'] !== 'livewire_change' || ($sel['prop'] ?? '') === '' || !preg_match('/filial|branch/i', $sel['prop'] . ' ' . $sel['method']))
                 throw new LcupError("Filial tanlagich kutilgan ko'rinishda emas (wire:model=filial_id / wire:change=change_filial). «Diagnostika» ni yuboring.", 'branch');
             $comp = null; foreach (lcup_lw_components($html) as $c) if ($c['id'] === $sel['lw_id']) { $comp = $c; break; }

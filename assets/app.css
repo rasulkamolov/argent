@@ -768,3 +768,6 @@ a.bcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border
 .subnav { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .subnav::-webkit-scrollbar { display: none; }
 .subnav a { flex: 0 0 auto; }
+
+/* LC-UP incidents: the details column (with the expandable originals / corrections) needs room */
+@media (min-width: 900px) { .lc-ev td[data-label="Tafsilot"] { min-width: 340px; } .lc-ev td[data-label="Talaba"] { min-width: 150px; } .lc-ev td[data-label="Kim"] { min-width: 120px; } }

@@ -45,9 +45,7 @@ $backups = array_reverse($bk); ?>
 
 <?php
 [$cfgVals, $cfgInfo] = private_config_read(); $hasPhone = ($cfgVals['LCUP_PHONE'] ?? '') !== ''; $hasPass = ($cfgVals['LCUP_PASSWORD'] ?? '') !== ''; $hasTgT = ($cfgVals['TELEGRAM_BOT_TOKEN'] ?? '') !== ''; $hasTgC = ($cfgVals['TELEGRAM_CHAT_ID'] ?? '') !== '';
-$hasCron = ($cfgVals['CRON_TOKEN'] ?? '') !== ''; $hasWh = ($cfgVals['LCUP_WEBHOOK_SECRET'] ?? '') !== '';
-$appUrl = lcup_current_url() ?: (lcup_app_url() ?: 'https://SAYT/kirimchiqim/argent');
-$cronUrl = $appUrl . '/cron.php?token=' . ($cfgVals['CRON_TOKEN'] ?? '…'); $secret = function ($has) { return $has ? '•••••• saqlangan' : ''; }; ?>
+$secret = function ($has) { return $has ? '•••••• saqlangan' : ''; }; ?>
 <section class="card card-pad stack" id="lcCfg" aria-labelledby="lcCfgT">
   <div class="row"><span class="icon-tile primary"><?= icon('radar') ?></span><div class="grow"><h2 class="card-title" id="lcCfgT">LC-UP monitoring</h2><p class="fs-sm text-3">Sozlamalar <code><?= e(private_config_file() ?: private_dir_target() . '/config.php') ?></code> ga yoziladi (public_html dan tashqarida, huquq 600) — bazaga emas</p></div></div>
   <form action="process.php" method="post" class="stack" data-loading autocomplete="off">
@@ -57,19 +55,15 @@ $cronUrl = $appUrl . '/cron.php?token=' . ($cfgVals['CRON_TOKEN'] ?? '…'); $se
       <label class="field"><span class="label">LC-UP parol</span><input class="input" type="password" name="lc_password" placeholder="<?= $secret($hasPass) ?: 'parol' ?>" autocomplete="new-password"></label>
       <label class="field"><span class="label">Telegram bot token</span><input class="input" type="password" name="tg_token" placeholder="<?= $secret($hasTgT) ?: '123456:ABC…' ?>" autocomplete="off"></label>
       <label class="field"><span class="label">Telegram chat ID</span><input class="input" name="tg_chat" placeholder="<?= $hasTgC ? '•••••• saqlangan' : '123456789' ?>" autocomplete="off"></label>
-      <label class="field" style="grid-column:1/-1"><span class="label">CRON_TOKEN</span>
-        <span class="row gap-2"><input class="input grow" id="lcCronTok" name="cron_token" placeholder="<?= $hasCron ? "saqlangan (almashtirish uchun yangisini yozing yoki «Yangi token yaratish»)" : 'bo\'sh — «Yangi token yaratish» ni bosing' ?>" autocomplete="off" style="font-family:ui-monospace,monospace"><button type="button" class="btn" id="lcGenTok"><?= icon('key-round', 'i-sm') ?> Yangi token yaratish</button></span></label>
-      <label class="field" style="grid-column:1/-1"><span class="label">LCUP_WEBHOOK_SECRET <span class="text-3 fw-5">(ixtiyoriy)</span></span>
-        <span class="row gap-2 row-wrap"><input class="input grow" type="password" name="webhook_secret" placeholder="<?= $secret($hasWh) ?: "bo'sh qolishi mumkin (webhook o'chiq)" ?>" autocomplete="off"><?php if ($hasWh): ?><label class="row gap-2 fs-sm text-2" style="cursor:pointer"><input type="checkbox" name="webhook_clear" value="1"> o'chirish</label><?php endif; ?></span></label>
       <label class="field" style="grid-column:1/-1"><span class="label">Monitorchi akkaunt nomi <span class="text-3 fw-5">(xodimlar faoliyatida o'tkazib yuboriladi)</span></span><input class="input" name="monitor_name" value="<?= e(setting('lcup.monitor_name', '')) ?>" placeholder="LC-UP dagi xodim nomi, masalan: Monitor"></label>
     </div>
     <p class="hint">Parol va tokenlar faqat yoziladi, qayta ko'rsatilmaydi. Maydon bo'sh qolsa eski qiymat o'zgarmaydi. Har o'zgarish jurnalga (maydon nomi, qiymatsiz) yoziladi va Telegram'ga darhol xabar ketadi.</p>
     <div class="row gap-2 row-wrap"><button class="btn btn-primary" type="submit"><?= icon('check', 'i-sm') ?> Saqlash</button></div>
   </form>
 
-  <div class="field"><span class="label">Cron havolasi <span class="text-3 fw-5">(cron-job.org, har 1 daqiqa; faqat administratorga ko'rinadi)</span></span>
-    <div class="row gap-2"><div class="pre-box grow" id="lcCronUrl" data-base="<?= e($appUrl) ?>/cron.php?token="><?= $hasCron ? e($cronUrl) : 'CRON_TOKEN hali sozlanmagan' ?></div><button type="button" class="btn" id="lcCopyUrl" <?= $hasCron ? '' : 'disabled' ?>><?= icon('link', 'i-sm') ?> Nusxa</button></div>
-    <span class="hint">Hostinger cron (CLI): <code>/usr/bin/php <?= e(realpath(__DIR__ . '/..') ?: dirname(__DIR__)) ?>/cron.php</code></span></div>
+  <div class="field"><span class="label">Hostinger → Cron Jobs <span class="text-3 fw-5">(har daqiqa: * * * * *)</span></span>
+    <div class="pre-box">/usr/bin/php <?= e(realpath(__DIR__ . '/..') ?: dirname(__DIR__)) ?>/cron.php</div>
+    <span class="hint">cron.php faqat buyruq satridan ishlaydi (internetdan ochilmaydi). Monitoring LC-UP va Do'konPro ni birga tekshiradi.</span></div>
 
   <div class="lc-check">
     <div class="<?= $cfgInfo['exists'] ? 'ok' : 'bad' ?>">config.php: <?= $cfgInfo['exists'] ? e($cfgInfo['file']) . ' · format: ' . e($cfgInfo['mode']) . ' · o\'zgargan: ' . e($cfgInfo['mtime'] ? date('d.m.Y H:i', $cfgInfo['mtime']) : '?') : "hali yo'q — «Saqlash» uni yaratadi" ?></div>
@@ -82,12 +76,4 @@ $cronUrl = $appUrl . '/cron.php?token=' . ($cfgVals['CRON_TOKEN'] ?? '…'); $se
   </div>
   <?php if ($lcTest): ?><div class="lc-check"><?php foreach ($lcTest as [$tok, $t]): ?><div class="<?= $tok === true ? 'ok' : ($tok === false ? 'bad' : 'warn') ?>"><?= e($t) ?></div><?php endforeach; ?></div><?php endif; ?>
 </section>
-<script>
-(function () {
-  var g = document.getElementById('lcGenTok'), t = document.getElementById('lcCronTok'), u = document.getElementById('lcCronUrl'), c = document.getElementById('lcCopyUrl');
-  function upd() { if (u && t && t.value) { u.textContent = u.getAttribute('data-base') + t.value + '  (saqlanmagan — «Saqlash» ni bosing)'; if (c) c.disabled = false; } }
-  if (g) g.addEventListener('click', function () { var a = new Uint8Array(24); crypto.getRandomValues(a); t.value = Array.prototype.map.call(a, function (x) { return ('0' + x.toString(16)).slice(-2); }).join(''); upd(); t.focus(); });
-  if (t) t.addEventListener('input', upd);
-  if (c) c.addEventListener('click', function () { var s = (u.textContent || '').replace(/\s+\(saqlanmagan.*$/, ''); (navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject()).then(function () { c.textContent = 'Nusxalandi ✓'; }, function () { var r = document.createRange(); r.selectNodeContents(u); var sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }); });
-})();
-</script>
+

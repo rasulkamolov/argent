@@ -51,7 +51,7 @@ chk("sale at 23:30 (outside 08:00–21:00) = RED night_sale", $e && $e['severity
 $m = mark(); $shop->sale(1, 3, [[1, 1, 3000]], 'cash', ['time' => '12:00:00']); run(); chk("an ordinary sale makes no event", !evs($m));
 // blocked user
 $m = mark(); $shop->x("UPDATE users SET active = 0 WHERE id = 5"); run(); $e = ev1($m, 'user_blocked'); chk("blocking of a user is recorded by Argent (blocked_at)", $e && db()->query("SELECT blocked_at FROM shop_users WHERE user_id = 5")->fetchColumn() !== null, $e);
-$m = mark(); $shop->sale(1, 5, [[1, 1, 3000]], 'cash', ['time' => '12:05:00']); run(); $e = ev1($m, 'sale_flagged'); chk("sale by the blocked user AFTER detection = RED", $e && has_flag($e, 'blocked_user'), $e);
+$m = mark(); $shop->sale(1, 5, [[1, 1, 3000]], 'cash', ['time' => date('H:i:s')]); run(); $e = ev1($m, 'sale_flagged'); chk("sale by the blocked user AFTER detection = RED", $e && has_flag($e, 'blocked_user'), $e);
 db()->prepare("UPDATE shop_users SET blocked_at = '2099-01-01 00:00:00' WHERE user_id = 5")->execute();   // pretend the block was detected later than a sale that is already in the shop
 $m = mark(); $shop->sale(1, 5, [[1, 1, 3000]], 'cash', ['time' => '12:06:00']); run(); chk("a sale made BEFORE the block was detected is not flagged as blocked", !ev1($m, 'sale_flagged'), evs($m));
 db()->prepare("UPDATE shop_users SET blocked_at = ? WHERE user_id = 5")->execute([date('Y-m-d H:i:s', strtotime('-1 day'))]);

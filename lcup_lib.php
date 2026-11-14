@@ -4,6 +4,7 @@
  * Pure helpers — the HTTP client is lcup_client.php, the HTML parsers lcup_parse.php, the sync engine lcup_sync.php.
  */
 require_once __DIR__ . '/layout.php';   // fmt(), e() ... (definitions only, prints nothing)
+require_once __DIR__ . '/lcup_parse.php';
 
 /** Flags that make an event RED (instant Telegram alert + unread counter). */
 const LCUP_RED_FLAGS = ['charge_reduced', 'charge_unresolved', 'amount_down', 'amount_zero', 'deleted', 'debt_reduction', 'new_discount', 'discount_changed', 'discount_removed', 'charge_changed', 'small_amount', 'off_hours', 'cash_missing', 'no_details', 'settings_changed', 'payment_missing'];
@@ -15,7 +16,7 @@ function lcup_defaults(): array {
     return ['small_amount' => '5000', 'work_from' => '08:00', 'work_to' => '21:00', 'late_minutes' => '60', 'eod_time' => '21:00',
             'delay_ms' => '350', 'budget_s' => '40', 'window_days' => '40', 'debt_interval' => '1', 'discount_interval' => '1', 'monitor_name' => '', 'summary_time' => '21:00', 'weekly_time' => '09:00', 'quick_fix_min' => '10', 'catchup_gap_min' => '10',
             'hot_pages' => '3', 'warm_pages' => '3', 'night_time' => '03:00', 'night_max_pages' => '3000', 'night_pages_per_run' => '25',
-            'allow_switch_post' => '1', 'history_via_livewire' => '1', 'hist_batch' => '20', 'switch_url' => '',
+            'hist_batch' => '20', 'tarix_per_run' => '12', 'leader_names' => 'Admin', 'leader_from' => '08:00', 'leader_to' => '22:00', 'accuracy_time' => '05:00', 'debt_grace_min' => '20', 'groups_url' => '/admin/groups',
             'worker_url' => '/admin/worker_reports', 'students_url' => '/admin/students', 'charge_per_run' => '20', 'archive_url' => '/admin/archive/tolovlars', 'payments_url' => '/admin/tolovlars',
             'discount_url' => '/admin/discount', 'debtors_url' => '/admin/qarzdorlar', 'alerts_on' => '1'];
 }
@@ -33,7 +34,7 @@ function lcup_state_del(string $k): void { db()->prepare("DELETE FROM lcup_state
 /* ----------------------------------------------------------------- logging (never contains secrets) */
 function lcup_secrets(): array {
     $s = [];
-    foreach (['LCUP_PASSWORD', 'LCUP_PHONE', 'CRON_TOKEN', 'LCUP_WEBHOOK_SECRET', 'TELEGRAM_BOT_TOKEN'] as $k) { $v = (string)cfg($k, ''); if (strlen($v) >= 4) $s[] = $v; }
+    foreach (['LCUP_PASSWORD', 'LCUP_PHONE', 'TELEGRAM_BOT_TOKEN'] as $k) { $v = (string)cfg($k, ''); if (strlen($v) >= 4) $s[] = $v; }
     $t = (string)private_get('telegram_token', ''); if (strlen($t) >= 8) $s[] = $t;
     $ph = preg_replace('/\D+/', '', (string)cfg('LCUP_PHONE', '')); if (strlen($ph) >= 7) { $s[] = $ph; $s[] = substr($ph, -9); }
     return $s;
@@ -58,12 +59,15 @@ function lcup_map_rows(bool $onlyActive = true): array {
 function lcup_branch_ids(): array { return array_map(function ($r) { return (int)$r['branch_id']; }, lcup_map_rows()); }
 
 /* ----------------------------------------------------------------- labels */
+/** Labels of the stored (evidence) event types, old names included: the event log is append-only, so old rows keep their names. */
 function lcup_type_labels(): array {
-    return ['payment_created' => "To'lov yaratildi", 'payment_changed' => "To'lov o'zgartirildi", 'payment_deleted' => "To'lov o'chirildi",
-            'log_edit' => "To'lov tahrirlandi (tafsilotsiz)", 'log_delete' => "To'lov o'chirildi (jurnal)", 'debt_reduced' => 'Qarz kamaygan',
-            'amount_changed' => "To'lov summasi o'zgartirilgan", 'payment_missing' => "To'lov ro'yxatda topilmadi", 'staff_activity' => 'Xodim faoliyati (tafsilotsiz)', 'discount_new' => 'Yangi chegirma', 'discount_changed' => "Chegirma o'zgargan", 'freeze_charge' => 'Muzlatishda pul yechildi',
-            'student_frozen' => 'Talaba muzlatildi', 'student_activated' => 'Talaba aktivlashtirildi', 'payment_other' => "To'lov bilan bog'liq amal",
-            'cash_missing' => 'Naqd Argentga kiritilmagan', 'charge_changed' => "Oylik to'lov summasi o'zgartirilgan", 'charge_edit_resolved' => "Minus to'lov tahriri aniqlandi", 'charge_edit_unresolved' => "Minus to'lov tahriri aniqlanmadi", 'discount_removed' => "Chegirma o'chirilgan", 'settings_changed' => "Monitoring sozlamalari o'zgartirildi", 'webhook' => 'Webhook', 'system' => 'Tizim', 'other' => 'Boshqa'];
+    return ['payment_created' => "To'lov yaratildi", 'payment_edited' => "To'lov tahrirlandi", 'payment_deleted' => "To'lov o'chirildi", 'charge_edited' => "Minus to'lov tahrirlandi", 'balance_edited' => 'Balans tahrirlandi',
+            'discount' => 'Chegirma', 'debt_unexplained' => 'Qarz sababsiz kamaydi', 'cash_missing' => 'Naqd Argentga kiritilmagan', 'freeze_charge' => 'Muzlatishda pul yechildi', 'settings_changed' => "Monitoring sozlamalari o'zgartirildi", 'system' => 'Tizim',
+            // older names (before v10) — shown only in the "original" view of a corrected incident
+            'payment_changed' => "To'lov o'zgartirildi (snapshot)", 'amount_changed' => "To'lov summasi o'zgargan (snapshot)", 'payment_missing' => "To'lov ro'yxatda topilmadi", 'log_edit' => "To'lov tahrirlandi (jurnal)", 'log_delete' => "To'lov o'chirildi (jurnal)",
+            'debt_reduced' => 'Qarz kamaygan (taxminiy)', 'charge_changed' => "Oylik to'lov summasi o'zgargan", 'charge_edit_resolved' => "Minus to'lov tahriri aniqlandi", 'charge_edit_unresolved' => "Minus to'lov tahriri aniqlanmadi",
+            'discount_new' => 'Yangi chegirma', 'discount_changed' => "Chegirma o'zgargan", 'discount_removed' => "Chegirma o'chirilgan", 'staff_activity' => 'Xodim faoliyati (tafsilotsiz)', 'webhook' => 'Webhook',
+            'student_frozen' => 'Talaba muzlatildi', 'student_activated' => 'Talaba aktivlashtirildi', 'student_added' => "Talaba guruhga qo'shildi", 'payment_other' => "To'lov bilan bog'liq amal", 'other' => 'Boshqa'];
 }
 function lcup_type_label(string $t): string { return lcup_type_labels()[$t] ?? $t; }
 function lcup_flag_labels(): array {
@@ -71,7 +75,9 @@ function lcup_flag_labels(): array {
     return ['charge_reduced' => "Oylik to'lov kamaytirildi", 'charge_increased' => "Oylik to'lov oshirildi", 'charge_unresolved' => "Minus to'lov tahriri aniqlanmadi", 'amount_down' => 'Summa kamaytirilgan', 'amount_zero' => '0 so\'mga tushirilgan', 'amount_up' => 'Summa oshirilgan', 'field_change' => "Sana/usul/guruh o'zgargan", 'quick_fix' => 'Yaratilgach darrov tuzatilgan', 'freeze_nonzero' => "Muzlatishda pul yechilgan", 'charge_changed' => "Oylik to'lov o'zgargan", 'discount_changed' => "Chegirma o'zgargan", 'discount_removed' => "Chegirma o'chirilgan", 'settings_changed' => "Sozlamalar o'zgargan", 'payment_missing' => "Ro'yxatda yo'q", 'gap' => 'Uzilish davrida aniqlangan',
             'amount_changed' => "Summa o'zgartirilgan", 'edited' => 'Tahrirlangan', 'late_edit' => "$lt tahrirlangan", 'deleted' => "O'chirilgan", 'late_delete' => "$lt o'chirilgan", 'no_reason' => 'Sababsiz',
             'debt_reduction' => 'Qarz/hisob kamaygan', 'new_discount' => 'Yangi chegirma', 'discount_up' => 'Chegirma oshgan', 'small_amount' => fmt(lcup_num('small_amount')) . " dan kam",
-            'off_hours' => 'Ish vaqtidan tashqari', 'cash_missing' => 'Naqd Argentga kiritilmagan', 'no_details' => "Tafsilot yo'q", 'weak' => "Taxminiy aniqlash"];
+            'off_hours' => 'Ish vaqtidan tashqari', 'cash_missing' => 'Naqd Argentga kiritilmagan', 'no_details' => "Tafsilot yo'q", 'weak' => "Taxminiy aniqlash",
+            'leader' => 'Rahbar akkaunti', 'rounding' => 'Yaxlitlash (≤10 so\'m)', 'balance_big' => "Balans to'g'ridan-to'g'ri o'zgartirildi", 'total_down' => "Talabaning jami to'lovi kamaydi", 'moved' => "To'lov boshqa to'lovga ko'chirildi",
+            'moved_other' => "Pul boshqa talabaga o'tdi", 'moved_in' => "Boshqa talabadan o'tkazilgan pul", 'actor_unknown' => "Xodim noma'lum (aniqlanmoqda)", 'debt_unexplained' => 'Qarz sababsiz kamaydi', 'left_list' => "Qarzdorlar ro'yxatidan chiqdi"];
 }
 function lcup_method_label(?string $m): string { return ['cash' => 'Naqd', 'card' => 'Plastik karta', 'bank' => 'Bank hisobi', 'other' => 'Boshqa'][$m ?? ''] ?? (string)$m; }
 function lcup_method_class(?string $m): string { return $m === 'cash' ? 'cash' : 'noncash'; }
@@ -150,24 +156,32 @@ function lcup_event_add(array $e): ?int {
     $now = lcup_now(); $lt = !empty($e['lcup_time']) ? $e['lcup_time'] : null;
     $cut = function ($s, $n) { return $s === null ? null : mb_substr((string)$s, 0, $n); };
     $st = db()->prepare("INSERT OR IGNORE INTO lcup_events (detected_at, lcup_time, event_date, branch_id, source, type, staff, student_id, student_name, group_name, amount, method,
-            before_json, after_json, details, raw, severity, flags, backfill, dedupe_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            before_json, after_json, details, raw, severity, flags, backfill, dedupe_key, creator, group_id, act_id, win_from, win_to) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     $st->execute([$now, $lt, $lt ? substr($lt, 0, 10) : substr($now, 0, 10), $e['branch_id'] ?? null, $e['source'] ?? 'snapshot', $e['type'] ?? 'other',
         $cut($e['staff'] ?? null, 120), $cut($e['student_id'] ?? null, 40), $cut($e['student_name'] ?? null, 160), $cut($e['group_name'] ?? null, 160),
         isset($e['amount']) ? (float)$e['amount'] : null, $e['method'] ?? null,
         !empty($e['before']) ? json_encode($e['before'], JSON_UNESCAPED_UNICODE) : null, !empty($e['after']) ? json_encode($e['after'], JSON_UNESCAPED_UNICODE) : null,
-        $cut($e['details'] ?? null, 600), $cut($e['raw'] ?? null, 3000), $sev, implode(',', $flags), !empty($e['backfill']) ? 1 : 0, (string)$e['dedupe_key']]);
+        $cut($e['details'] ?? null, 600), $cut($e['raw'] ?? null, 3000), $sev, implode(',', $flags), !empty($e['backfill']) ? 1 : 0, (string)$e['dedupe_key'],
+        $cut($e['creator'] ?? null, 120), $e['group_id'] ?? null, $e['act_id'] ?? null, $e['win_from'] ?? null, $e['win_to'] ?? null]);
     return $st->rowCount() ? (int)db()->lastInsertId() : null;
 }
+/** Unread = red incidents not yet marked "ko'rildi" (one per real action, not per source). */
 function lcup_unread_count(): int {
     static $n = null;
-    if ($n === null) { try { $n = (int)db()->query("SELECT COUNT(*) FROM lcup_events WHERE severity = 'red' AND reviewed_at IS NULL AND backfill = 0")->fetchColumn(); } catch (Throwable $e) { $n = 0; } }
+    if ($n === null) { try { $n = (int)db()->query("SELECT COUNT(*) FROM lcup_incidents WHERE severity = 'red' AND reviewed_at IS NULL AND backfill = 0")->fetchColumn(); } catch (Throwable $e) { $n = 0; } }
     return $n;
 }
-function lcup_review(int $id, int $userId, string $note): bool {
-    $st = db()->prepare("UPDATE lcup_events SET reviewed_at = ?, reviewed_by = ?, review_note = ? WHERE id = ? AND reviewed_at IS NULL");
-    $st->execute([lcup_now(), $userId, mb_substr(trim($note), 0, 500), $id]);
-    return $st->rowCount() > 0;
+/** "Ko'rildi" on an incident: written once on the incident AND on every original event (so a re-processing keeps it). */
+function lcup_review(int $incidentId, int $userId, string $note): bool {
+    $note = mb_substr(trim($note), 0, 500); $now = lcup_now();
+    $st = db()->prepare("UPDATE lcup_incidents SET reviewed_at = ?, reviewed_by = ?, review_note = ? WHERE id = ? AND reviewed_at IS NULL");
+    $st->execute([$now, $userId, $note, $incidentId]); if (!$st->rowCount()) return false;
+    db()->prepare("UPDATE lcup_events SET reviewed_at = ?, reviewed_by = ?, review_note = ? WHERE reviewed_at IS NULL AND id IN (SELECT event_id FROM lcup_incident_events WHERE incident_id = ?)")->execute([$now, $userId, $note, $incidentId]);
+    return true;
 }
+/** Leader ("rahbar") accounts: actions are logged but shown as 🟡 in their own filter. */
+function lcup_leaders(): array { $v = setting('lcup.leader_names', null); if ($v === null) $v = lcup_defaults()['leader_names']; return array_values(array_filter(array_map(function ($x) { return lc_norm(trim($x)); }, explode(',', (string)$v)))); }   // an explicitly empty list = no leader accounts
+function lcup_is_leader(?string $name): bool { return $name !== null && $name !== '' && in_array(lc_norm($name), lcup_leaders(), true); }
 
 /* ----------------------------------------------------------------- telegram */
 function lcup_tg(): array {
@@ -199,54 +213,14 @@ function lcup_current_url(): string {
 /** Base URL for links: the current request when there is one (so a renamed folder is picked up at once), else the stored value (cron/CLI alerts). */
 function lcup_app_url(): string {
     $cur = lcup_current_url(); if ($cur !== '') return $cur;
-    $u = rtrim((string)private_get('app_url', ''), '/');
-    if ($u !== '' && preg_match('~/argentx$~', $u)) { $u = preg_replace('~/argentx$~', '/kirimchiqim/argent', $u); private_set(['app_url' => $u]); }   // folder renamed argentx -> kirimchiqim/argent
-    return $u;
+    return rtrim((string)private_get('app_url', ''), '/');
 }
 /** Remember how the admin reaches the app, so cron/CLI alerts can contain links (rewritten on every admin page view). */
 function lcup_remember_app_url(): void {
     $u = lcup_current_url(); if ($u === '') return;
     if (rtrim((string)private_get('app_url', ''), '/') !== $u) private_set(['app_url' => $u]);
 }
-function lcup_alert_html(array $ev): string {
-    $h = function ($s) { return htmlspecialchars((string)$s, ENT_NOQUOTES, 'UTF-8'); };
-    $b = $ev['branch_id'] ? (branch_get((int)$ev['branch_id'])['name'] ?? '') : '';
-    $labels = lcup_flag_labels(); $fl = [];
-    foreach (array_filter(explode(',', (string)$ev['flags'])) as $f) $fl[] = $labels[$f] ?? $f;
-    $t = "🔴 <b>LC-UP: " . $h(lcup_type_label($ev['type'])) . "</b>\n";
-    if ($b !== '') $t .= "🏢 " . $h($b) . "\n";
-    if ($ev['staff'] !== null && $ev['staff'] !== '') $t .= "👤 Xodim: " . $h($ev['staff']) . "\n";
-    if ($ev['student_name'] || $ev['student_id']) $t .= "🎓 Talaba: " . $h($ev['student_name'] ?: '—') . ($ev['student_id'] ? ' (#' . $h($ev['student_id']) . ')' : '') . "\n";
-    if ($ev['amount'] !== null) $t .= "💰 Summa: " . fmt($ev['amount']) . " so'm\n";
-    if ($ev['details']) $t .= "📝 " . $h($ev['details']) . "\n";
-    $t .= "🕒 " . $h($ev['lcup_time'] ? date('d.m.Y H:i', strtotime($ev['lcup_time'])) : date('d.m.Y H:i', strtotime($ev['detected_at']))) . "\n";
-    if ($fl) $t .= "⚠️ " . $h(implode(', ', $fl)) . "\n";
-    $base = lcup_app_url(); if ($base !== '') $t .= '🔗 ' . $h($base . '/lcup.php?id=' . (int)$ev['id']);
-    return trim($t);
-}
-/** Sends Telegram messages for red events not yet alerted (max $max per call, the rest summarised). */
-function lcup_alerts_flush(int $max = 8): array {
-    $sent = 0; $fail = 0;
-    if (lcup_setting('alerts_on') !== '1' || !lcup_tg_ready()) return ['sent' => 0, 'failed' => 0, 'skipped' => true];
-    $since = lcup_state_get('alerts_since', '2000-01-01 00:00:00');
-    $st = db()->prepare("SELECT * FROM lcup_events WHERE severity = 'red' AND backfill = 0 AND alerted_at IS NULL AND detected_at >= ? ORDER BY id LIMIT 60");
-    $st->execute([$since]); $evs = $st->fetchAll();
-    $mark = db()->prepare("UPDATE lcup_events SET alerted_at = ? WHERE id = ? AND alerted_at IS NULL");
-    foreach ($evs as $i => $ev) {
-        if ($i >= $max) {
-            $rest = array_slice($evs, $i); $err = null;
-            $ok = lcup_tg_send("🔴 <b>LC-UP: yana " . count($rest) . " ta shubhali hodisa</b>\nBatafsil: " . (lcup_app_url() ? lcup_app_url() . '/lcup.php' : 'Argent → LC-UP nazorat'), $err);
-            if ($ok) foreach ($rest as $r) $mark->execute([lcup_now(), $r['id']]);
-            $ok ? $sent++ : $fail++;
-            break;
-        }
-        $err = null;
-        if (lcup_tg_send(lcup_alert_html($ev), $err)) { $mark->execute([lcup_now(), $ev['id']]); $sent++; usleep(250000); }
-        else { $fail++; lcup_state_set('tg_last_error', $err); break; }
-    }
-    if ($sent && !$fail) lcup_state_del('tg_last_error');
-    return ['sent' => $sent, 'failed' => $fail];
-}
+/* Telegram alerts are sent per INCIDENT (lcup_incidents.php: lcup_incident_alerts_flush), never per source event. */
 
 /* ----------------------------------------------------------------- health */
 function lcup_health_update(bool $ok, string $msg = ''): void {

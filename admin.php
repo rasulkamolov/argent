@@ -7,6 +7,9 @@ require_once __DIR__ . '/shop_report.php';
 require_admin();
 lcup_remember_app_url();
 lcup_stale_check();
+// keys that older versions stored and nothing reads any more (CRON_TOKEN, LCUP_WEBHOOK_SECRET) are removed from config.php once
+[$__cfg] = private_config_read(); $__obs = array_intersect_key($__cfg, array_flip(CONFIG_OBSOLETE_KEYS));
+if ($__obs && private_config_write(array_fill_keys(array_keys($__obs), ''))[0]) audit('lcup.config', 'lcup', null, ['removed' => array_keys($__obs)]);
 define('ADMIN_PAGE', 1);
 
 $today = date('Y-m-d'); $month_start = date('Y-m-01'); $month_end = date('Y-m-t');

@@ -158,20 +158,33 @@ function lc_empty_state(DOMDocument $d): bool {
 }
 
 /* ------------------------------------------------------------------ event text classification (worker_reports) */
-/** @return array [type, payment_related] */
+/**
+ * One type name per action (used for log rows and Tarix rows alike).
+ * @return array [type, payment_related]
+ */
 function lcup_classify_event(string $text): array {
     $t = mb_strtolower(lc_apos($text));
     $pay = (bool)preg_match("/to'?lov/u", $t);
+    if (preg_match("/minus\s+to'?lov/u", $t)) return ['charge_edited', true];
+    if (preg_match("/balans/u", $t)) return ['balance_edited', true];
     if (preg_match("/muzlat.*pul|pul.*yechib/u", $t)) return ['freeze_charge', true];
-    if ($pay && preg_match("/(o'chirildi|o'chirib|bekor qilindi|ochirildi)/u", $t)) return ['log_delete', true];
-    if ($pay && preg_match("/(tahrirlandi|o'zgartirildi|o'zgardi|yangilandi)/u", $t)) return ['log_edit', true];
+    if ($pay && preg_match("/(o'chirildi|o'chirib|bekor qilindi|ochirildi)/u", $t)) return ['payment_deleted', true];
+    if ($pay && preg_match("/(tahrirlandi|o'zgartirildi|o'zgardi|yangilandi)/u", $t)) return ['payment_edited', true];
     if ($pay && preg_match("/(yaratildi|qo'shildi|qabul qilindi|kiritildi)/u", $t)) return ['payment_created', true];
-    if (strpos($t, 'chegirma') !== false) return ['payment_other', true];
+    if (strpos($t, 'chegirma') !== false) return ['discount', true];
     if (strpos($t, 'qarz') !== false) return ['payment_other', true];
     if (preg_match("/muzlatildi|muzlatish/u", $t)) return ['student_frozen', true];
     if (preg_match("/aktivlashtirildi|aktivlashtirish|aktivlandi/u", $t)) return ['student_activated', true];
-    if ($pay || preg_match("/pul |summa|narx|balans/u", $t)) return ['payment_other', true];
+    if (preg_match("/guruhga qo'shildi/u", $t)) return ['student_added', true];
+    if ($pay || preg_match("/pul |summa|narx/u", $t)) return ['payment_other', true];
     return ['other', false];
+}
+/** "−40,000 so'm" / "64 617 so'm" / "-285 000 → -285 001" / "24,617 -> 64,617"  =>  [old|null, new|null] (signed as shown). */
+function lc_amount_pair(string $s): array {
+    $s = str_replace(['−', '–', '—'], '-', lc_apos($s));
+    if (preg_match('/(-?\s*\d[\d\s.,]*)\s*(?:so\'?m)?\s*(?:→|->|=>)\s*(-?\s*\d[\d\s.,]*)/u', $s, $m)) return [lc_money(str_replace(' ', '', $m[1])), lc_money(str_replace(' ', '', $m[2]))];
+    if (preg_match('/([+-])?\s*(\d[\d\s.,]*)/u', $s, $m)) { $v = lc_money($m[2]); if ($v !== null && ($m[1] ?? '') === '-') $v = -$v; return [null, $v]; }
+    return [null, null];
 }
 
 /* ------------------------------------------------------------------ worker_reports ("Xodimlar faoliyati") */
@@ -206,14 +219,15 @@ function lcup_parse_worker_reports(string $html, string $today): array {
             $q = function ($c) use ($xp, $row) { return $xp->query('.//*[' . lc_cx($c) . ']', $row)->item(0); };
             $text = lc_text($q('xf-rt')); if ($text === '') continue;
             $tm = lc_text($q('xf-time')); $sid = $sname = $gid = $gname = null;
-            if (($l = $q('xf-link')) && preg_match('~/students/(\d+)~', lc_attr($l, 'href'), $mm)) { $sid = $mm[1]; $sname = lc_text($l); }
-            if (($g = $q('xf-gp')) && preg_match('~/groups/(\d+)~', lc_attr($g, 'href'), $mm)) { $gid = $mm[1]; $gname = lc_text($g); }
-            $amt = ($a = $q('xf-amt')) ? lc_money(lc_text($a)) : null;
-            if ($amt !== null && ($a && strpos(lc_text($a), '-') !== false || strpos(lc_text($a), '−') !== false)) $amt = -abs($amt);
-            $rm = lc_text($q('xf-rm'));
-            if ($amt === null && preg_match("/([−\-+])\s*(-?[\d][\d\s.,]*)\s*so'?m/u", lc_apos($rm), $mm)) { $amt = lc_money($mm[2]); if ($amt !== null && $mm[1] !== '+') $amt = -abs($amt) * ($mm[2][0] === '-' ? -1 : 1); }
+            if (($l = $q('xf-link'))) { $sname = lc_text($l) ?: null; if (preg_match('~/students/(\d+)~', lc_attr($l, 'href'), $mm)) $sid = $mm[1]; }   // "Balans tahrirlandi" shows the name WITHOUT a link
+            if (($g = $q('xf-gp'))) { $gname = lc_text($g) ?: null; if (preg_match('~/groups/(\d+)~', lc_attr($g, 'href'), $mm)) $gid = $mm[1]; }
+            $rm = lc_text($q('xf-rm')); $at = ($a = $q('xf-amt')) ? lc_text($a) : '';
+            [$old, $amt] = $at !== '' ? lc_amount_pair($at) : [null, null];
+            if ($amt === null && preg_match("/(-?\\s*\\d[\\d\\s.,]*\\s*(?:so'?m)?\\s*(?:→|->)\\s*-?\\s*\\d[\\d\\s.,]*|[−\\-+]\\s*\\d[\\d\\s.,]*\\s*so'?m)/u", lc_apos($rm), $mm)) [$old, $amt] = lc_amount_pair($mm[1]);
+            [$type] = lcup_classify_event($text);
+            if (in_array($type, ['payment_created', 'payment_deleted', 'payment_edited'], true) && $amt !== null) $amt = abs($amt);     // a payment's value; the sign only says which way the balance moved
             $res['rows'][] = ['act_id' => $m[1], 'date' => $date, 'time' => lc_dt($tm, $date), 'text' => $text, 'student_id' => $sid, 'student_name' => $sname,
-                              'group_id' => $gid, 'group_name' => $gname, 'amount' => $amt, 'raw' => lc_clean($text . ' ' . $rm . ' ' . $tm)];
+                              'group_id' => $gid, 'group_name' => $gname, 'amount' => $amt, 'old_amount' => $old, 'raw' => lc_clean($text . ' ' . $rm . ' ' . $tm)];
         }
     }
     if ($res['rows']) { $res['structure'] = true; $res['strategy'] = 'xf'; }
@@ -284,19 +298,35 @@ function lcup_parse_discounts(string $html): array {
     }
     return $res;
 }
+/**
+ * Moliya → Qarzdorlar (branch-scoped). Rows: student (link /admin/students/ID), groups, BALANCE (signed, negative = debt), comment.
+ * Footer: "Jami: -37,755,478 so'm / 108 ta".
+ */
 function lcup_parse_debtors(string $html): array {
     $d = lc_dom($html);
-    $al = ['student' => ['FISH', 'TALABA', 'OQUVCHI', 'ISM'], 'debt' => ['QARZ', 'QARZDORLIK', 'QARZSUMMASI', 'JAMIQARZ', 'BALANS', 'SUMMA', 'MIQDOR'], 'group' => ['GURUH']];
-    $res = ['structure' => false, 'rows' => [], 'max_page' => lc_max_page($d)];
+    $al = ['student' => ['FISH', 'TALABA', 'OQUVCHI', 'ISM'], 'debt' => ['BALANS', 'QARZ', 'QARZDORLIK', 'QARZSUMMASI', 'JAMIQARZ', 'SUMMA', 'MIQDOR'], 'group' => ['GURUH', 'GURUHLAR'], 'comment' => ['IZOH', 'KOMMENTARIYA', 'ESLATMA']];
+    $res = ['structure' => false, 'rows' => [], 'max_page' => lc_max_page($d), 'jami' => null, 'count' => null];
+    if (preg_match("/jami\s*:?\s*(-?[\d][\d\s.,]*)\s*so'?m(?:\s*\/\s*(\d+)\s*ta)?/iu", lc_apos(str_replace(['−', '–'], '-', lc_text($d->documentElement))), $m)) { $res['jami'] = lc_money(str_replace(' ', '', $m[1])); $res['count'] = isset($m[2]) && $m[2] !== '' ? (int)$m[2] : null; }
     $pick = lc_pick_table($d, $al, ['student', 'debt']);
     if (!$pick) return $res;
     [$t, $map] = $pick; $res['structure'] = true;
     foreach ($t['rows'] as $r) {
-        [$sid, $sname] = lc_student_link($r['tr']); $name = $sname ?: lc_cell($r, $map, 'student'); $debt = lc_money(lc_cell($r, $map, 'debt'));
-        if (($name === '' && !$sid) || $debt === null) continue;
-        $res['rows'][] = ['key' => $sid ?: 'n:' . lc_norm($name), 'student_id' => $sid, 'student_name' => $name, 'group' => lc_cell($r, $map, 'group'), 'debt' => abs($debt)];
+        [$sid, $sname] = lc_student_link($r['tr']); $name = $sname ?: lc_cell($r, $map, 'student'); [, $bal] = lc_amount_pair(lc_cell($r, $map, 'debt'));
+        if (($name === '' && !$sid) || $bal === null) continue;
+        $res['rows'][] = ['key' => $sid ?: 'n:' . lc_norm($name), 'student_id' => $sid, 'student_name' => $name, 'group' => lc_cell($r, $map, 'group'), 'balance' => (float)$bal, 'debt' => abs((float)$bal), 'comment' => lc_cell($r, $map, 'comment')];
     }
     return $res;
+}
+/** Guruhlar list (/admin/groups, branch-scoped, paginated): every group link /admin/groups/ID with its name. */
+function lcup_parse_groups(string $html): array {
+    $d = lc_dom($html); $xp = new DOMXPath($d); $out = [];
+    foreach ($xp->query('//a[@href]') as $a) {
+        if (!preg_match('~/groups/(\d+)(?:[/?#]|$)~', $a->getAttribute('href'), $m)) continue;
+        $nm = lc_text($a); if ($nm === '' || preg_match('/^[\d\s]+$/u', $nm)) { if (!isset($out[$m[1]])) $out[$m[1]] = ''; continue; }
+        if (!isset($out[$m[1]]) || mb_strlen($nm) > mb_strlen($out[$m[1]])) $out[$m[1]] = $nm;
+    }
+    $g = []; foreach ($out as $id => $n) $g[] = ['id' => (string)$id, 'name' => $n];
+    return ['structure' => (bool)$g || lc_empty_state($d), 'groups' => $g, 'page' => lc_page_info($d)];
 }
 
 /* ------------------------------------------------------------------ navigation + branch dropdown discovery */
@@ -392,50 +422,41 @@ function lcup_current_branch(string $html, array $keys, array $names): ?string {
 
 /* ------------------------------------------------------------------ student page: "Tarix" rows */
 /**
- * Rows of a student's "Tarix" (history) tab: event text | group | amount (new value; negative for a minus payment) | staff | date-time.
- * The markup has not been seen yet, so two strategies are tried: a table with recognisable headers, and "row-like" elements whose
- * visible pieces come in the order event, group, amount, staff, date-time.
- * @return array ['structure' => bool, 'strategy' => string, 'rows' => [['text','group','amount','staff','at','raw']]]
+ * Rows of a student's "Tarix" tab (filled by students.history-livewire). Real markup, newest first, each row followed by <hr>:
+ *   <div class="row mb-2">
+ *     <div class="col-4 ..."><span>Talaba uchun to'lov tahrirlandi</span></div>                                   action
+ *     <div class="col-4 ..."><span>Math kids 1/3/5 9:00 <br> <span class="text-danger">24,617</span> -> <span class="text-success">64,617</span></span></div>
+ *     <div class="col-2"><span>Admin</span></div>                                                                 actor
+ *     <div class="col-2"><span>2026-11-13 19:41</span></div>                                                     time
+ *   </div>
+ * Edit: text-danger = OLD, text-success = NEW. Single amount: created = text-success, deleted = text-danger, charges negative ("-43,076").
+ * @return array ['structure' => bool, 'rows' => [['text','kind','group','amount','old_amount','new_amount','staff','at','raw']]]
  */
 function lcup_parse_student_history(string $html): array {
-    $d = lc_dom($html); $xp = new DOMXPath($d); $rows = []; $strategy = 'none';
-    $al = ['event' => ['HODISA', 'AMAL', 'HARAKAT', 'MATN', 'TAVSIF', 'VOQEA', 'TURI'], 'group' => ['GURUH'], 'amount' => ['SUMMA', 'NARX', 'MIQDOR', 'QIYMAT'], 'staff' => ['HODIM', 'XODIM', 'KIM', 'KIMTOMONIDAN', 'FOYDALANUVCHI'], 'time' => ['SANA', 'VAQT', 'SANAVAQT', 'YARATILGAN', 'KIRITILGAN']];
-    if (($pick = lc_pick_table($d, $al, ['event', 'time']))) {
-        [$t, $map] = $pick; $strategy = 'table';
-        foreach ($t['rows'] as $r) { $ev = lc_cell($r, $map, 'event'); $at = lc_dt(lc_cell($r, $map, 'time')); if ($ev === '' || !$at) continue;
-            $rows[] = ['text' => $ev, 'group' => lc_cell($r, $map, 'group') ?: null, 'amount' => isset($map['amount']) ? lc_money(lc_cell($r, $map, 'amount')) : null, 'staff' => lc_cell($r, $map, 'staff') ?: null, 'at' => $at, 'raw' => implode(' | ', $r['texts'])]; }
+    $d = lc_dom($html); $xp = new DOMXPath($d); $rows = [];
+    foreach ($xp->query('//div[' . lc_cx('row') . ' and ' . lc_cx('mb-2') . ']') as $row) {
+        $cols = []; foreach ($row->childNodes as $c) if ($c instanceof DOMElement && preg_match('/\bcol-\d+\b/', lc_attr($c, 'class'))) $cols[] = $c;
+        if (count($cols) < 4) continue;
+        $text = lc_text($cols[0]); $staff = lc_text($cols[2]); $at = lc_dt(lc_text($cols[3]));
+        if ($text === '' || !$at) continue;
+        $grp = ''; $danger = null; $success = null;
+        foreach ($xp->query('.//span[' . lc_cx('text-danger') . ']', $cols[1]) as $sp) if ($danger === null) $danger = lc_amount_pair(lc_text($sp))[1];
+        foreach ($xp->query('.//span[' . lc_cx('text-success') . ']', $cols[1]) as $sp) if ($success === null) $success = lc_amount_pair(lc_text($sp))[1];
+        $walk = function (DOMNode $n) use (&$walk, &$grp) { foreach ($n->childNodes as $c) { if ($c instanceof DOMElement && strtolower($c->tagName) === 'br') return true; if ($c instanceof DOMElement && preg_match('/text-(danger|success)/', lc_attr($c, 'class'))) return true; if ($c instanceof DOMText) $grp .= $c->textContent; elseif ($c instanceof DOMElement && $walk($c)) return true; } return false; };
+        $walk($cols[1]); $grp = lc_clean($grp);
+        $plain = lc_text($cols[1]);
+        if ($danger === null && $success === null && preg_match('/(-?\s*\d[\d\s.,]*\s*(?:->|→)\s*-?\s*\d[\d\s.,]*)\s*$/u', $plain, $m)) { [$danger, $success] = lc_amount_pair($m[1]); if ($grp === '' || strpos($grp, $m[1]) !== false) $grp = lc_clean(str_replace($m[1], '', $plain)); }
+        [$kind] = lcup_classify_event($text);
+        $old = null; $new = null;
+        if ($danger !== null && $success !== null) { $old = $danger; $new = $success; }
+        else $new = $success ?? $danger;
+        if (in_array($kind, ['payment_created', 'payment_deleted', 'payment_edited'], true)) { if ($old !== null) $old = abs($old); if ($new !== null) $new = abs($new); }
+        $rows[] = ['text' => $text, 'kind' => $kind, 'group' => $grp !== '' ? $grp : null, 'amount' => $new, 'old_amount' => $old, 'new_amount' => $new, 'staff' => $staff !== '' ? $staff : null, 'at' => $at, 'raw' => lc_clean($text . ' | ' . $plain . ' | ' . $staff . ' | ' . lc_text($cols[3]))];
     }
-    if (!$rows) {
-        $verbs = "/(to'?lov|talaba|guruh|chegirma|qarz|pul)[^|]{0,60}(tahrirlandi|yaratildi|o'chirildi|qo'shildi|o'zgartirildi)/iu"; $cands = []; $anc = new SplObjectStorage();
-        foreach ($xp->query('//li|//tr|//div|//article|//p') as $n) {
-            $tx = lc_text($n); $len = mb_strlen($tx); if ($len < 15 || $len > 700) continue;
-            if (!preg_match('/\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}/', $tx) || !preg_match($verbs, lc_apos($tx))) continue;
-            $cands[] = $n;
-        }
-        foreach ($cands as $n) for ($pn = $n->parentNode; $pn; $pn = $pn->parentNode) $anc->attach($pn);
-        foreach ($cands as $n) {
-            if ($anc->contains($n)) continue;
-            $pieces = [];
-            $leaf = function (DOMNode $x) use (&$leaf, &$pieces) { $kids = false; foreach ($x->childNodes as $c) if ($c instanceof DOMElement) { $kids = true; $leaf($c); } if (!$kids) { $t = lc_text($x); if ($t !== '') $pieces[] = $t; } };
-            $leaf($n);
-            if (count($pieces) < 3) $pieces = array_values(array_filter(array_map('lc_clean', preg_split('/\s*[|·•]\s*/u', lc_text($n)))));
-            $ev = $at = null; $amt = null; $before = []; $after = []; $seenAmt = false; $amtIdx = null;
-            foreach ($pieces as $i => $pc) {
-                $pa = lc_apos($pc);
-                if ($at === null && preg_match('/^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(:\d{2})?$/', $pa)) { $at = lc_dt($pa); continue; }
-                if ($ev === null && preg_match($verbs, $pa)) { $ev = $pc; continue; }
-                if ($amt === null && preg_match('/^[−\-–+]?\s*\d[\d\s.,]*\s*(so\'?m|sum|uzs)?$/iu', $pa)) { $amt = lc_money($pa); $seenAmt = true; continue; }
-                if ($seenAmt) $after[] = $pc; else $before[] = $pc;
-            }
-            if ($ev === null || $at === null) { if (preg_match('/(\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(:\d{2})?)/', lc_text($n), $mm)) $at = $at ?: lc_dt($mm[1]); if ($ev === null || $at === null) continue; }
-            $rows[] = ['text' => $ev, 'group' => $before ? end($before) : null, 'amount' => $amt, 'staff' => $after ? $after[0] : null, 'at' => $at, 'raw' => lc_text($n)];
-        }
-        if ($rows) $strategy = 'pieces';
-    }
-    $pane = $xp->query('//*[@id="history"]')->item(0); $paneText = $pane ? lc_text($pane) : '';
-    return ['structure' => (bool)$rows || ($pane && mb_strlen($paneText) > 20), 'strategy' => $strategy, 'rows' => $rows];
+    $card = $xp->query('//*[' . lc_cx('card-body') . ']')->length > 0;
+    return ['structure' => (bool)$rows || $card, 'strategy' => $rows ? 'rows' : 'none', 'rows' => $rows];
 }
-/** Is this history row a "minus payment edited" row, and its new (negative) amount known? */
+/** Is this history row a "minus payment edited" row with its new (negative) amount known? */
 function lcup_history_is_minus_edit(array $r): bool {
-    return (bool)preg_match("/to'?lov\s+tahrirlandi/iu", lc_apos((string)$r['text'])) && $r['amount'] !== null && (float)$r['amount'] < 0;
+    return ($r['kind'] ?? lcup_classify_event((string)$r['text'])[0]) === 'charge_edited' && $r['amount'] !== null;
 }

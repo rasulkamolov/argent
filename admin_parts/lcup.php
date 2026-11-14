@@ -1,7 +1,7 @@
 <?php defined('ADMIN_PAGE') || exit;
 $mapRows = lcup_map_rows(false); $mapBy = []; foreach ($mapRows as $r) $mapBy[(int)$r['branch_id']] = $r;
 $cfgOk = (string)cfg('LCUP_PHONE', '') !== '' && (string)cfg('LCUP_PASSWORD', '') !== ''; $pd = private_dir();
-$self = lcup_current_url() ?: (lcup_app_url() ?: 'https://SAYT/kirimchiqim/argent');
+$rp = json_decode((string)lcup_state_get('reprocess_last', ''), true);
 $lastOk = lcup_state_get('last_success');
 $v = function ($k) { return e(lcup_setting($k)); };
 ?>
@@ -13,10 +13,8 @@ $v = function ($k) { return e(lcup_setting($k)); };
   <section class="card card-pad stack" aria-labelledby="lcConn">
     <div class="row"><span class="icon-tile primary"><?= icon('plug') ?></span><div><h2 class="card-title" id="lcConn">Ulanish va tekshiruv</h2><p class="fs-sm text-3">LC-UP ga faqat o'qish uchun kiriladi</p></div></div>
     <div class="lc-check">
-      <div class="<?= $pd && is_file($pd . '/config.php') ? 'ok' : 'bad' ?>">config.php: <?= $pd && is_file($pd . '/config.php') ? e($pd . '/config.php') : "topilmadi — " . e(private_dir_target()) . "/config.php yarating" ?></div>
-      <div class="<?= $cfgOk ? 'ok' : 'bad' ?>">LCUP_PHONE / LCUP_PASSWORD: <?= $cfgOk ? "to'ldirilgan (ko'rsatilmaydi)" : "to'ldirilmagan" ?></div>
-      <div class="<?= (string)cfg('CRON_TOKEN', '') !== '' ? 'ok' : 'warn' ?>">CRON_TOKEN: <?= (string)cfg('CRON_TOKEN', '') !== '' ? 'sozlangan' : "sozlanmagan (faqat Hostinger cron CLI ishlaydi, cron-job.org uchun kerak)" ?></div>
-      <div class="<?= (string)cfg('LCUP_WEBHOOK_SECRET', '') !== '' ? 'ok' : 'warn' ?>">LCUP_WEBHOOK_SECRET: <?= (string)cfg('LCUP_WEBHOOK_SECRET', '') !== '' ? 'sozlangan' : "sozlanmagan (webhook o'chiq)" ?></div>
+      <div class="<?= $cfgOk ? 'ok' : 'bad' ?>">LC-UP telefon / parol: <?= $cfgOk ? "saqlangan (ko'rsatilmaydi)" : "kiritilmagan — <a href='admin.php#settings' style='text-decoration:underline'>Sozlamalar → LC-UP monitoring</a>" ?></div>
+      <div class="<?= lcup_state_get('groups_day_' . (lcup_branch_ids()[0] ?? 0)) ? 'ok' : 'warn' ?>">Guruh → filial xaritasi: <?= (int)db()->query("SELECT COUNT(*) FROM lcup_groups")->fetchColumn() ?> ta guruh<?php foreach (lcup_map_rows() as $mm): ?> · <?= e($mm['branch_name']) ?>: <?= (int)lcup_state_get('groups_n_' . $mm['branch_id'], 0) ?> (<?= e(lcup_state_get('groups_day_' . $mm['branch_id']) ?: "hali o'qilmagan") ?>)<?php endforeach; ?></div>
       <?php if ($pd && path_inside_webroot($pd)): ?><div class="bad">Maxfiy papka public_html ICHIDA! Uni public_html dan tashqariga ko'chiring.</div><?php endif; ?>
     </div>
     <div class="row gap-2 row-wrap">
@@ -28,12 +26,16 @@ $v = function ($k) { return e(lcup_setting($k)); };
     <p class="hint">«Diagnostika» LC-UP sahifalarining xom HTML'ini (token va parollarsiz) saqlaydi va ZIP qiladi — parser ishlamay qolsa menga yuborasiz.</p>
   </section>
 
-  <section class="card card-pad stack" aria-labelledby="lcRun">
-    <div class="row"><span class="icon-tile primary"><?= icon('clock') ?></span><div><h2 class="card-title" id="lcRun">Avtomatik ishga tushirish (har 1 daqiqa)</h2><p class="fs-sm text-3">Cron + webhook</p></div></div>
-    <div class="field"><span class="label">Hostinger → Cron Jobs (har daqiqa: * * * * *)</span><div class="pre-box">/usr/bin/php <?= e(__DIR__ . '/../cron.php') ?></div></div>
-    <div class="field"><span class="label">yoki cron-job.org (HTTP, har 1 daqiqa)</span><div class="pre-box"><?= e($self) ?>/cron.php?token=<i>CRON_TOKEN</i></div></div>
-    <div class="field"><span class="label">Webhook (LC-UP ga kiriting, POST + X-LC-UP-Signature)</span><div class="pre-box"><?= e($self) ?>/webhook.php</div></div>
-    <p class="hint">Tokenni va webhook sirini <code>argent_private/config.php</code> ga o'zingiz yozasiz; bu yerda ko'rsatilmaydi.</p>
+  <section class="card card-pad stack" aria-labelledby="lcRe">
+    <div class="row"><span class="icon-tile primary"><?= icon('history') ?></span><div><h2 class="card-title" id="lcRe">Qayta ishlash va aniqlik</h2><p class="fs-sm text-3">Saqlangan barcha yozuvlarni yangi qoidalar bilan qayta ko'rib chiqadi (xodim, filial, takrorlar, ko'chirilgan to'lovlar)</p></div></div>
+    <?php if ($rp): ?><div class="lc-check"><div class="ok">Oxirgi: <?= e(date('d.m.Y H:i', strtotime($rp['at']))) ?> · <?= (int)$rp['events'] ?> ta asl yozuv → <?= (int)$rp['incidents'] ?> ta hodisa (oldin <?= (int)$rp['old_incidents'] ?>) · <?= (int)$rp['corrections_new'] ?> ta tuzatish<?php foreach (($rp['by_field'] ?? []) as $f => $n): ?> · <?= e(['actor' => 'xodim', 'branch' => 'filial', 'duplicate' => 'takror', 'kind' => 'turi'][$f] ?? $f) ?>: <?= (int)$n ?><?php endforeach; ?> · ko'chirilgan: <?= (int)$rp['moved'] ?> · aniqlanmagan minus tahrirlar: <?= (int)$rp['pending_minus'] ?></div></div><?php endif; ?>
+    <div class="row gap-2 row-wrap">
+      <form action="process.php" method="post" data-loading><?= csrf_field() ?><input type="hidden" name="action" value="lcup_reprocess"><button class="btn btn-primary" type="submit" data-confirm="Barcha hodisalar asl yozuvlardan qayta quriladi. Asl yozuvlar o'zgarmaydi, tuzatishlar alohida yoziladi, Telegram'ga xabar ketmaydi." data-confirm-title="Qayta ishlansinmi?" data-confirm-ok="Qayta ishlash" data-confirm-tone="primary"><?= icon('refresh-cw', 'i-sm') ?> Qayta ishlash</button></form>
+      <a class="btn" href="aniqlik.php"><?= icon('target', 'i-sm') ?> Aniqlik tekshiruvi</a>
+      <a class="btn" href="qarzdorlik.php"><?= icon('chart-column', 'i-sm') ?> Qarzdorlik o'zgarishi</a>
+    </div>
+    <div class="field"><span class="label">Hostinger → Cron Jobs (har daqiqa: * * * * *)</span><div class="pre-box">/usr/bin/php <?= e(realpath(__DIR__ . '/..') ?: dirname(__DIR__)) ?>/cron.php</div></div>
+    <p class="hint">Buyruq satridan ham: <code>php tools/lcup_reprocess.php</code> (Tarix bilan: <code>--tarix</code>).</p>
   </section>
 </div>
 
@@ -82,13 +84,20 @@ $v = function ($k) { return e(lcup_setting($k)); };
         <label class="field"><span class="hint">So'rovlar orasida pauza (ms)</span><input class="input input-sm" name="delay_ms" value="<?= $v('delay_ms') ?>" inputmode="numeric"></label>
         <label class="field"><span class="hint">Tunda har ishga tushishda sahifa</span><input class="input input-sm" name="night_pages_per_run" value="<?= $v('night_pages_per_run') ?>" inputmode="numeric"></label>
       </div>
-      <label class="row card-pad" style="border:1px solid var(--border);border-radius:14px;background:var(--surface-2);align-items:flex-start;gap:12px;cursor:pointer"><span class="switch"><input type="checkbox" name="allow_switch_post" value="1" <?= lcup_setting('allow_switch_post') === '1' ? 'checked' : '' ?>><i></i></span>
-        <span><b class="fs-md">Livewire o'qish amallari (oq ro'yxat)</b><br><span class="hint">Yoqilsa, monitoring faqat <code>lcup_policy.php</code> dagi ro'yxatni yuboradi: filial tanlagich (<code>filial_id</code>, <code>change_filial</code>), xodim tanlash/davr/bo'lim/«yana ko'rsatish» va o'quvchi «To'lovlar» tabi. Saqlash, tahrirlash, o'chirish, to'lovni tiklash kabi hamma narsa kodda taqiqlangan. O'chiq bo'lsa faqat akkaunt turgan filial va birinchi xodim o'qiladi. Har so'rov pastdagi jurnalga yoziladi.</span></span></label>
-      <label class="row card-pad" style="border:1px solid var(--border);border-radius:14px;background:var(--surface-2);align-items:flex-start;gap:12px;cursor:pointer"><span class="switch"><input type="checkbox" name="history_via_livewire" value="1" <?= lcup_setting('history_via_livewire') === '1' ? 'checked' : '' ?>><i></i></span>
-        <span><b class="fs-md">Talaba «Tarix» tabini yuklash (students.history-livewire)</b><br><span class="hint">«Minus to'lov tahrirlandi» yozuvidagi talabani aniqlash uchun talaba «Tarix» tabi o'qiladi. Tab LC-UP da Livewire (POST) bilan yuklanadi: faqat <code>students.history-livewire</code> komponenti va faqat yuklash/ko'rsatish usullari ruxsat etiladi; <code>students.edit-livewire</code>, to'lov qo'shish/tahrirlash/o'chirish va boshqa hamma komponentlar yopiq. Boshqa usul nomi so'ralsa, yuborilmaydi va jurnalga REFUSED deb yoziladi.</span></span></span></label>
+      <div class="card-pad stack" style="border:1px solid var(--border);border-radius:14px;background:var(--surface-2)">
+        <b class="fs-md">👑 Rahbar akkauntlari</b>
+        <label class="field"><span class="hint">LC-UP dagi nomlari (vergul bilan). Amallari yoziladi, lekin 🟡 «Rahbar akkaunti» bo'lib alohida filtrda ko'rinadi</span><input class="input input-sm" name="leader_names" value="<?= $v('leader_names') ?>" placeholder="Admin"></label>
+        <div class="grid g-2" style="gap:8px"><label class="field"><span class="hint">Ruxsat etilgan vaqt: boshlanishi</span><input class="input input-sm" type="time" name="leader_from" value="<?= $v('leader_from') ?>"></label><label class="field"><span class="hint">tugashi</span><input class="input input-sm" type="time" name="leader_to" value="<?= $v('leader_to') ?>"></label></div>
+        <span class="hint">Shu vaqtdan tashqari ishlatilsa — bitta Telegram xabar (boshqa odam sizning loginingizdan foydalanayotgan bo'lishi mumkin).</span>
+      </div>
+      <div class="grid g-2" style="gap:8px">
+        <label class="field"><span class="hint">Aniqlik tekshiruvi vaqti (har kuni)</span><input class="input input-sm" type="time" name="accuracy_time" value="<?= $v('accuracy_time') ?>"></label>
+        <label class="field"><span class="hint">Har ishga tushishda Tarix o'qiladigan talabalar (filial)</span><input class="input input-sm" name="tarix_per_run" value="<?= $v('tarix_per_run') ?>" inputmode="numeric"></label>
+        <label class="field"><span class="hint">Qarz kamaysa sababni kutish (daqiqa)</span><input class="input input-sm" name="debt_grace_min" value="<?= $v('debt_grace_min') ?>" inputmode="numeric"></label>
+      </div>
       <label class="row" style="gap:10px;cursor:pointer"><span class="switch"><input type="checkbox" name="alerts_on" value="1" <?= lcup_setting('alerts_on') === '1' ? 'checked' : '' ?>><i></i></span><b class="fs-md">Telegram ogohlantirishlari yoqilgan</b></label>
       <details class="lc-details"><summary>LC-UP sahifa manzillari (odatda o'zgartirish shart emas)</summary><div class="stack" style="margin-top:8px">
-        <?php foreach (['worker_url' => 'Xodimlar faoliyati', 'archive_url' => "O'chirilgan to'lovlar", 'payments_url' => "To'lovlar ro'yxati", 'discount_url' => 'Chegirma hisoboti', 'debtors_url' => 'Qarzdorlar'] as $k => $l): ?>
+        <?php foreach (['worker_url' => 'Xodimlar faoliyati', 'archive_url' => "O'chirilgan to'lovlar", 'payments_url' => "To'lovlar ro'yxati", 'discount_url' => 'Chegirma hisoboti', 'debtors_url' => 'Qarzdorlar', 'groups_url' => 'Guruhlar'] as $k => $l): ?>
         <label class="field"><span class="hint"><?= e($l) ?></span><input class="input input-sm" name="<?= $k ?>" value="<?= $v($k) ?>"></label><?php endforeach; ?>
       </div></details>
       <button class="btn btn-primary" type="submit"><?= icon('check', 'i-sm') ?> Saqlash</button>

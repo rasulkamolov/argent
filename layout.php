@@ -218,6 +218,8 @@ function ui_lcup_subnav(string $active): void {
     ?><div class="subnav no-print" role="navigation" aria-label="LC-UP bo'limlari">
   <a href="lcup.php" <?= $active === 'lcup' ? 'aria-current="page"' : '' ?>><?= icon('radar', 'i-sm') ?> Nazorat</a>
   <a href="solishtirish.php" <?= $active === 'recon' ? 'aria-current="page"' : '' ?>><?= icon('scale', 'i-sm') ?> Solishtirish</a>
+  <a href="qarzdorlik.php" <?= $active === 'debt' ? 'aria-current="page"' : '' ?>><?= icon('chart-column', 'i-sm') ?> Qarzdorlik o'zgarishi</a>
+  <a href="aniqlik.php" <?= $active === 'acc' ? 'aria-current="page"' : '' ?>><?= icon('target', 'i-sm') ?> Aniqlik</a>
 </div>
 <?php
 }

@@ -7,7 +7,7 @@
  *   filial  : the top-bar branch dropdown (selects which branch is shown; changes no data)
  *   view    : read-only calls on /admin/worker_reports (choose staff, period, category, "yana ko'rsatish") and the student "To'lovlar" tab
  *   history : the student "Tarix" tab: ONLY the component students.history-livewire, ONLY loading/rendering (see 'methods'),
- *             and only while the setting history_via_livewire is on. Every other component of the student page
+ *             always the same strict rule (no switch). Every other component of the student page
  *             (students.edit-livewire, payment add/edit/delete, ...) is never contacted.
  *
  * Deliberately NOT allowed (examples): save, create*, store*, update*, edit*, delete*, destroy*, remove*, restore, and the payment
@@ -37,7 +37,6 @@ const LCUP_LW_DENY_COMPONENT = '/(edit|add|create|delete|destroy|remove|update|s
 function lcup_policy_check(string $purpose, array $updates, bool $cascade = false, string $component = ''): void {
     $p = LCUP_LW_ALLOWED[$purpose] ?? null;
     if ($p === null) lcup_policy_refuse($purpose, 'noma\'lum maqsad');
-    if ($purpose === 'history' && lcup_setting('history_via_livewire') !== '1') lcup_policy_refuse($purpose, "Tarix uchun Livewire sozlamada o'chirilgan");
     if (isset($p['components']) && !in_array($component, $p['components'], true)) lcup_policy_refuse($purpose, 'komponent ' . ($component !== '' ? $component : '?') . ' oq ro\'yxatda yo\'q');
     foreach ($updates as $u) {
         $t = $u['type'] ?? ''; $pl = $u['payload'] ?? [];

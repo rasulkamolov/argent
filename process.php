@@ -434,8 +434,10 @@ if (is_admin()) {
         $tm = function ($k, $d) { return preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', pstr($k)) ? pstr($k) : $d; };
         foreach (['summary_time' => $tm('summary_time', '21:00'), 'weekly_time' => $tm('weekly_time', '09:00'), 'quick_fix_min' => $num('quick_fix_min', 0, 120), 'small_amount' => $num('small_amount', 0, 100000000), 'late_minutes' => $num('late_minutes', 1, 10080), 'hot_pages' => $num('hot_pages', 1, 20), 'warm_pages' => $num('warm_pages', 0, 20), 'delay_ms' => $num('delay_ms', 0, 5000), 'night_pages_per_run' => $num('night_pages_per_run', 1, 200),
                  'work_from' => $tm('work_from', '08:00'), 'work_to' => $tm('work_to', '21:00'), 'eod_time' => $tm('eod_time', '21:00'), 'night_time' => $tm('night_time', '03:00'),
-                 'allow_switch_post' => !empty($_POST['allow_switch_post']) ? '1' : '0', 'history_via_livewire' => !empty($_POST['history_via_livewire']) ? '1' : '0', 'alerts_on' => !empty($_POST['alerts_on']) ? '1' : '0'] as $k => $val) setting_set('lcup.' . $k, $val);
-        foreach (['worker_url', 'archive_url', 'payments_url', 'discount_url', 'debtors_url'] as $k) { $u = pstr($k); if ($u === '' || preg_match('~^/[A-Za-z0-9_\-/.]*$~', $u)) setting_set('lcup.' . $k, $u); }
+                 'leader_from' => $tm('leader_from', '08:00'), 'leader_to' => $tm('leader_to', '22:00'), 'accuracy_time' => $tm('accuracy_time', '05:00'), 'tarix_per_run' => $num('tarix_per_run', 1, 60), 'debt_grace_min' => $num('debt_grace_min', 5, 240),
+                 'leader_names' => mb_substr(implode(', ', array_filter(array_map('trim', explode(',', pstr('leader_names'))))), 0, 300),
+                 'alerts_on' => !empty($_POST['alerts_on']) ? '1' : '0'] as $k => $val) setting_set('lcup.' . $k, $val);
+        foreach (['worker_url', 'archive_url', 'payments_url', 'discount_url', 'debtors_url', 'groups_url'] as $k) { $u = pstr($k); if ($u === '' || preg_match('~^/[A-Za-z0-9_\-/.]*$~', $u)) setting_set('lcup.' . $k, $u); }
         require_once __DIR__ . '/lcup_report.php'; lcup_settings_changed(['qoidalar/chegaralar' . (empty($_POST['alerts_on']) ? ' (Telegram ogohlantirish O\'CHIRILDI)' : '')]);
         done($A . '#lcup', "LC-UP sozlamalari saqlandi");
     }
@@ -457,15 +459,25 @@ if (is_admin()) {
         if (($v = (string)($_POST['lc_password'] ?? '')) !== '') { if (mb_strlen($v) > 200) done($back, "Parol juda uzun", 'error'); $set('LCUP_PASSWORD', 'LCUP_PASSWORD', $v); }
         if (($v = $in('tg_token')) !== '') { if (!preg_match('/^[0-9]{5,}:[A-Za-z0-9_\-]{20,}$/', $v)) done($back, "Bot token formati noto'g'ri (123456:ABC…)", 'error'); $set('TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_TOKEN', $v); }
         if (($v = $in('tg_chat')) !== '') { if (!preg_match('/^(-?[0-9]{5,20}|@[A-Za-z0-9_]{5,})$/', $v)) done($back, "Chat ID formati noto'g'ri (masalan 123456789 yoki -100…)", 'error'); $set('TELEGRAM_CHAT_ID', 'TELEGRAM_CHAT_ID', $v); }
-        if (($v = $in('cron_token')) !== '') { if (!preg_match('/^[A-Za-z0-9_\-]{16,128}$/', $v)) done($back, "CRON_TOKEN kamida 16 ta harf/raqam bo'lsin (A–Z, 0–9, _ -)", 'error'); $set('CRON_TOKEN', 'CRON_TOKEN', $v); }
-        if (!empty($_POST['webhook_clear'])) { if (($cur['LCUP_WEBHOOK_SECRET'] ?? '') !== '') { $ch['LCUP_WEBHOOK_SECRET'] = ''; $names[] = 'LCUP_WEBHOOK_SECRET (o\'chirildi)'; } }
-        elseif (($v = $in('webhook_secret')) !== '') { if (mb_strlen($v) < 16 || mb_strlen($v) > 200) done($back, "Webhook siri kamida 16 belgi bo'lsin", 'error'); $set('LCUP_WEBHOOK_SECRET', 'LCUP_WEBHOOK_SECRET', $v); }
         $mon = mb_substr($in('monitor_name'), 0, 80); if ($mon !== (string)setting('lcup.monitor_name', '') && isset($_POST['monitor_name'])) { setting_set('lcup.monitor_name', $mon); $names[] = 'monitor_name'; }
         if (!$ch && !$names) done($back, "O'zgarish yo'q (bo'sh qoldirilgan maydonlar eski qiymatni saqlaydi)");
         if ($ch) { [$ok, $msg] = private_config_write($ch); if (!$ok) done($back, $msg, 'error'); private_set(['telegram_token' => null, 'telegram_chat' => null]); }
         if (isset($ch['TELEGRAM_BOT_TOKEN']) || isset($ch['TELEGRAM_CHAT_ID'])) lcup_state_set('alerts_since', lcup_now());
         lcup_settings_changed($names, $oldTg);
         done($back, "LC-UP monitoring sozlamalari saqlandi (" . count($names) . " ta maydon). Jurnalga yozildi va Telegram'ga xabar yuborildi.");
+    }
+    if ($action === 'lcup_reprocess') {
+        require_once __DIR__ . '/lcup_incidents.php'; @set_time_limit(600); session_write_close();
+        try { $r = lcup_reprocess_all(); app_session_start(); audit('lcup.reprocess', 'lcup', null, ['incidents' => $r['incidents'], 'corrections' => $r['corrections_new']]);
+            done($A . '#lcup', "Qayta ishlandi: {$r['events']} ta asl yozuv → {$r['incidents']} ta hodisa (oldin {$r['old_incidents']}), {$r['corrections_new']} ta yangi tuzatish, ko'chirilgan to'lov: {$r['moved']}. Telegram'ga xabar yuborilmadi."); }
+        catch (Throwable $e) { app_session_start(); done($A . '#lcup', 'Qayta ishlashda xato: ' . $e->getMessage(), 'error'); }
+    }
+    if ($action === 'lcup_accuracy_now') {
+        require_once __DIR__ . '/lcup_sync.php'; @set_time_limit(300); session_write_close(); $sum = ['warnings' => [], 'errors' => []]; $err = '';
+        try { $c = LcupClient::fromConfig(); foreach (lcup_map_rows() as $m) { $c->switch_branch((string)$m['lcup_key'], (string)$m['lcup_name'], lcup_setting('worker_url')); lcup_accuracy_due($c, (int)$m['branch_id'], $sum, microtime(true) + 120, true); } }
+        catch (Throwable $e) { $err = $e->getMessage(); }
+        app_session_start(); audit('lcup.accuracy', 'lcup'); $d = lcup_accuracy_day(date('Y-m-d'));
+        done('aniqlik.php', $err !== '' ? "Xato: $err" : "Tekshirildi: {$d['ok']}/{$d['checked']} to'g'ri", $err !== '' ? 'error' : 'ok');
     }
     if ($action === 'lcup_test_telegram') {
         require_once __DIR__ . '/lcup_lib.php'; $err = null;

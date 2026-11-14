@@ -5,8 +5,11 @@
  * Sources (all verified against saved real pages unless marked "unverified"):
  *   /admin/worker_reports   activity log of the selected staff member: "to'lov yaratildi" + ORIGINAL amount, student, group, time
  *   /admin/archive/tolovlars deleted payments with payment id, deleted time, staff and reason
- *   /admin/tolovlars        live payment list = CURRENT amount per payment id (unverified: page not seen yet)
- *   /admin/discount, /admin/qarzdorlar   discounts and debtors (unverified)
+ *   /admin/tolovlars        live payment list = CURRENT amount per payment id (branch-scoped)
+ *   /admin/qarzdorlar       debtors with signed balance + "Jami" (branch-scoped)   /admin/groups  group id -> branch (branch-scoped)
+ *   /admin/discount         discounts
+ * The activity log of a center-wide user (e.g. "Admin") is NOT branch-scoped: the same row id appears in both branch views.
+ * A log row is therefore stored ONCE (by its row id) and its branch comes from the group / the student, never from the open branch.
  *
  * Coverage:  every run   hot pages (newest billing dates) + a few warm pages (rotating through the last 40 days)
  *            nightly     slices of a full walk over ALL payment pages + the whole archive (default from 03:00)
@@ -14,6 +17,9 @@
 require_once __DIR__ . '/lcup_client.php';
 require_once __DIR__ . '/lcup_report.php';
 require_once __DIR__ . '/lcup_edits.php';
+require_once __DIR__ . '/lcup_incidents.php';
+require_once __DIR__ . '/lcup_debtrep.php';
+require_once __DIR__ . '/lcup_accuracy.php';
 
 function lcup_lock() {
     $d = private_dir(); $dir = ($d && is_dir($d) && is_writable($d)) ? $d : data_dir_ready('lcup');
@@ -63,7 +69,7 @@ function lcup_run(array $o = []): array {
         db()->prepare("UPDATE lcup_gaps SET filled = 1, note = ? WHERE id = ?")->execute([$sum['new_events'] . " yangi hodisa topildi", $gap['id']]);
         lcup_tg_send("🔁 <b>LC-UP monitoring tiklandi</b>\nUzilish: " . date('d.m H:i', strtotime($gap['from'])) . '–' . date('d.m H:i', strtotime($gap['to'])) . "\nO'sha davrdagi amallar 7 kunlik jurnaldan to'ldirildi: " . $sum['new_events'] . " ta hodisa.");
     }
-    try { lcup_alerts_flush(); } catch (Throwable $e) { lcup_log('alerts: ' . $e->getMessage()); }
+    try { lcup_incidents_process(); lcup_incident_alerts_flush(); } catch (Throwable $e) { lcup_log('incidents/alerts: ' . $e->getMessage() . ' @' . basename($e->getFile()) . ':' . $e->getLine()); }
     try { lcup_reports_due(); } catch (Throwable $e) { lcup_log('reports: ' . $e->getMessage()); }
     lcup_state_set('last_warnings', json_encode(array_slice($sum['warnings'], 0, 12), JSON_UNESCAPED_UNICODE));
     lcup_health_update($sum['ok'], implode(' | ', $sum['errors']));
@@ -91,6 +97,7 @@ function lcup_sync_branch(LcupClient $c, array $m, array &$sum, float $deadline)
     $bid = (int)$m['branch_id'];
     $html = $c->switch_branch((string)$m['lcup_key'], (string)$m['lcup_name'], lcup_setting('worker_url'));
     if ($c->resolved_key && $c->resolved_key !== (string)$m['lcup_key']) db()->prepare("UPDATE lcup_branch_map SET lcup_key = ? WHERE branch_id = ?")->execute([$c->resolved_key, $bid]);
+    lcup_source('Guruhlar (guruh → filial)', $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_sync_groups($c, $bid, $sum, $deadline); });
     lcup_source('Xodimlar faoliyati', $bid, false, $sum, function () use ($c, $bid, $html, &$sum) { lcup_sync_activity($c, $bid, $html, $sum); });
     lcup_source("O'chirilgan to'lovlar", $bid, false, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_sync_archive($c, $bid, $sum, $deadline, 2); });
     lcup_source("To'lovlar ro'yxati", $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_sync_list($c, $bid, $sum, $deadline); });
@@ -99,30 +106,46 @@ function lcup_sync_branch(LcupClient $c, array $m, array &$sum, float $deadline)
     lcup_source('Qarzdorlar', $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_check_debts($c, $bid, $sum, $deadline); });
     lcup_source('Chegirmalar', $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_check_discounts($c, $bid, $sum, $deadline); });
     lcup_source("Minus to'lov tahrirlari (talabani aniqlash)", $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_resolve_charge_edits($c, $bid, $sum, $deadline); });
+    // evidence -> incidents now, so the Tarix look-ups below see this run's new incidents
+    lcup_incidents_process();
+    lcup_source('Talaba «Tarix» (xodimni aniqlash)', $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_incident_tarix($c, $bid, $sum, $deadline); });
+    lcup_source("Qarz kamayishi (sababni tekshirish)", $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_debt_pending_eval($c, $bid, $sum, $deadline); });
+    lcup_source('Aniqlik tekshiruvi', $bid, true, $sum, function () use ($c, $bid, &$sum, $deadline) { lcup_accuracy_due($c, $bid, $sum, $deadline); });
 }
 
 /* ============================================================== activity log (every staff member) */
-/** Stores new activity rows of one staff member and turns them into events. Returns [new rows, rows that were already known]. */
+/**
+ * Stores new activity rows of one staff member and turns them into events. Returns [new rows, rows that were already known].
+ * A row id seen before (also in the OTHER branch's view — center-wide users) is the same action: only "seen_in" is updated.
+ */
 function lcup_acts_ingest(int $bid, array $rows, ?string $staff, bool $base, ?array $gap): array {
-    $ins = db()->prepare("INSERT OR IGNORE INTO lcup_acts (branch_id, act_id, staff, act_time, act_text, type, student_id, student_name, group_id, group_name, amount, first_seen, backfill) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
-    $new = 0; $known = 0;
+    $ins = db()->prepare("INSERT OR IGNORE INTO lcup_acts (act_id, branch_id, read_branch, seen_in, staff, act_time, act_text, type, student_id, student_name, group_id, group_name, amount, old_amount, first_seen, backfill, state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    $seen = db()->prepare("UPDATE lcup_acts SET seen_in = CASE WHEN (',' || seen_in || ',') LIKE ? THEN seen_in WHEN seen_in = '' OR seen_in IS NULL THEN ? ELSE seen_in || ',' || ? END WHERE act_id = ?");
+    $new = 0; $known = 0; $unknownGroup = false;
     foreach (array_reverse($rows) as $r) {                                   // oldest first
         [$type, $rel] = lcup_classify_event($r['text']);
         if (!$rel) { lcup_note_ignored($r['text']); continue; }
-        $ins->execute([$bid, $r['act_id'], $staff, $r['time'], $r['text'], $type, $r['student_id'], $r['student_name'], $r['group_id'], $r['group_name'], $r['amount'], lcup_now(), $base ? 1 : 0]);
-        if (!$ins->rowCount()) { $known++; continue; }
+        $sid = $r['student_id']; $sname = $r['student_name'];
+        if (!$sid && $sname) [$sid] = lcup_student_by_name($sname);                                         // "Balans tahrirlandi": name only
+        [$b, $how] = lcup_branch_for($r['group_id'], $r['group_name'], $sid, $sname);
+        if ($r['group_id'] && $how !== 'guruh') $unknownGroup = true;
+        $state = $type === 'charge_edited' && !$sid ? 'pending' : 'open';                                   // aniqlanmoqda: the student is found later from Tarix (lcup_edits.php)
+        $ins->execute([$r['act_id'], $b, $bid, (string)$bid, $staff, $r['time'], $r['text'], $type, $sid, $sname, $r['group_id'], $r['group_name'], $r['amount'], $r['old_amount'] ?? null, lcup_now(), $base ? 1 : 0, $state]);
+        if (!$ins->rowCount()) { $seen->execute(['%,' . $bid . ',%', (string)$bid, (string)$bid, $r['act_id']]); $known++; continue; }
         $new++;
-        $charge = (bool)preg_match('/minus/iu', $r['text']);
-        if ($type === 'log_edit' && $charge) db()->prepare("UPDATE lcup_acts SET state = 'pending' WHERE branch_id = ? AND act_id = ?")->execute([$bid, $r['act_id']]);     // aniqlanmoqda: the student is found later (lcup_edits.php)
         $inGap = $gap && $r['time'] && $r['time'] >= $gap['from'] && $r['time'] <= $gap['to'];
-        $ev = ['type' => $type, 'branch_id' => $bid, 'source' => 'worker_report', 'staff' => $staff, 'student_id' => $r['student_id'], 'student_name' => $r['student_name'], 'group_name' => $r['group_name'],
-               'amount' => $r['amount'], 'lcup_time' => $r['time'], 'raw' => $r['raw'], 'backfill' => $base, 'is_charge' => $charge, 'flags' => $inGap ? ['gap'] : [], 'dedupe_key' => "act|$bid|{$r['act_id']}"];
+        $ev = ['type' => $type, 'branch_id' => $b, 'source' => 'worker_report', 'staff' => $staff, 'student_id' => $sid, 'student_name' => $sname, 'group_name' => $r['group_name'], 'group_id' => $r['group_id'], 'act_id' => $r['act_id'],
+               'amount' => $r['amount'], 'lcup_time' => $r['time'], 'raw' => $r['raw'], 'backfill' => $base, 'is_charge' => $type === 'charge_edited', 'flags' => $inGap ? ['gap'] : [], 'dedupe_key' => "act|{$r['act_id']}"];
+        if (in_array($type, ['balance_edited', 'charge_edited', 'payment_edited'], true)) { if ($r['old_amount'] !== null) $ev['before'] = ['amount' => $r['old_amount']]; if ($r['amount'] !== null) $ev['after'] = ['amount' => $r['amount']]; }
         if ($type === 'payment_created') $ev['details'] = "To'lov yaratildi: " . lcup_amount_text($r['amount']) . ($r['group_name'] ? " · " . $r['group_name'] : '');
-        elseif ($type === 'log_edit') $ev['details'] = $charge ? "Minus to'lov (hisob/qarz) tahrirlandi — LC-UP jurnali talaba va summani ko'rsatmaydi" : "To'lov tahrirlandi — LC-UP jurnali tafsilotni ko'rsatmaydi";
+        elseif ($type === 'charge_edited') $ev['details'] = "Minus to'lov (hisob/qarz) tahrirlandi — LC-UP jurnali talaba va summani ko'rsatmaydi, talaba «Tarix» dan aniqlanadi";
+        elseif ($type === 'payment_edited') $ev['details'] = "To'lov tahrirlandi: yangi summa " . lcup_amount_text($r['amount']) . " (eski summa Tarixdan)";
+        elseif ($type === 'balance_edited') $ev['details'] = "Balans to'g'ridan-to'g'ri o'zgartirildi: " . ($r['old_amount'] !== null ? fmt($r['old_amount']) . ' → ' : '') . lcup_amount_text($r['amount']) . ($sid ? '' : " · talaba ro'yxatlarda nomi bo'yicha topilmadi");
         else $ev['details'] = $r['text'] . ($r['amount'] !== null ? ' (' . lcup_amount_text($r['amount']) . ')' : '');
         if ($inGap) $ev['details'] .= ' · uzilish davrida aniqlandi';
         lcup_event_add($ev);
     }
+    if ($unknownGroup) lcup_state_set('groups_force', '1');                  // a group id we do not know yet: refresh the group map soon
     return [$new, $known];
 }
 /** Reads "yana ko'rsatish" until the batch contains rows we already know (new events are always on top), or everything when $all. */
@@ -143,7 +166,7 @@ function lcup_sync_activity(LcupClient $c, int $bid, string $html, array &$sum):
     if (!$p0['structure']) throw new LcupError("Sahifa tuzilishi tanilmadi (.xf-row topilmadi). «Diagnostika» ni bosing.", 'layout');
     $base = !lcup_state_get("base_act_$bid"); $gap = $sum['gap'] ?? null; $all = $base || $gap;
     $monitor = lc_norm((string)lcup_setting('monitor_name')); $isMon = function (?string $n) use ($monitor) { return $monitor !== '' && lc_norm((string)$n) === $monitor; };
-    $viewOk = lcup_setting('allow_switch_post') === '1';
+    $viewOk = true;                                                          // Livewire read calls are always on (whitelist in lcup_policy.php)
     $page = ['url' => $c->url(lcup_setting('worker_url')), 'html' => $html, 'comps' => []]; foreach (lcup_lw_components($html) as $x) $page['comps'][$x['id']] = $x;
     $c->adopt_csrf($html);
     $shown = []; foreach ($p0['rows'] as $r) $shown[$r['date']] = ($shown[$r['date']] ?? 0) + 1;
@@ -160,11 +183,7 @@ function lcup_sync_activity(LcupClient $c, int $bid, string $html, array &$sum):
         if (!empty($s['selected']) || $s['id'] === null) continue;
         $k = "staffcnt_{$bid}_{$s['id']}"; $prev = lcup_state_get($k);
         if ($isMon($s['name'])) { lcup_state_set($k, (int)$s['count']); continue; }
-        if (!$viewOk || !$p0['staff_comp']) {                                  // Livewire read calls switched off: only the counters are visible
-            if ($prev !== null && !$base && (int)$s['count'] > (int)$prev)
-                lcup_event_add(['type' => 'staff_activity', 'branch_id' => $bid, 'source' => 'worker_report', 'staff' => $s['name'], 'info_only' => true, 'details' => "«{$s['name']}» amallari soni " . (int)$prev . " → " . (int)$s['count'] . " (tafsilot ko'rinmaydi: Livewire o'qish amallari o'chiq)", 'dedupe_key' => "staffcnt|$bid|{$s['id']}|{$s['count']}|" . date('YmdH')]);
-            lcup_state_set($k, (int)$s['count']); continue;
-        }
+        if (!$p0['staff_comp']) { $sum['warnings'][] = "Xodimlar ro'yxati komponenti topilmadi — «{$s['name']}» o'qilmadi."; continue; }
         if ($prev !== null && (int)$s['count'] === (int)$prev && !$all && !$base) continue;   // nothing new for this person (saves requests)
         $fr = $c->view_run($page, $p0['staff_comp'], [LcupClient::call('openHistory', [(string)$s['id']])]);
         $p = lcup_parse_worker_reports(implode("\n", $fr), date('Y-m-d'));
@@ -179,7 +198,6 @@ function lcup_sync_activity(LcupClient $c, int $bid, string $html, array &$sum):
         lcup_acts_ingest($bid, $rows, $s['name'], $base, $gap); $readStaff[lc_norm($s['name'])] = array_column($rows, 'act_id');
         lcup_state_set($k, (int)$s['count']);
     }
-    foreach ($p0['day_totals'] as $d => $tot) if ($tot > ($shown[$d] ?? 0) && !$viewOk) $sum['warnings'][] = (branch_get($bid)['name'] ?? $bid) . ": jurnal $d kuni $tot ta amaldan faqat " . ($shown[$d] ?? 0) . " tasini ko'rsatdi.";
     lcup_state_set("base_act_$bid", '1');
 }
 
@@ -235,14 +253,15 @@ function lcup_archive_rows(int $bid, array $rows, bool $baseline): int {
         $pay = lcup_match_payment($bid, $r, $key);
         if ($pay && !$pay['deleted_at']) db()->prepare("UPDATE lcup_payments SET deleted_at = ?, delete_info = ?, miss_n = 0 WHERE id = ?")->execute([$r['deleted_at'] ?: lcup_now(), $r['reason'] ?: 'arxiv', $pay['id']]);
         // the activity-log record of this payment (paired earlier, or found now by student + group + amount)
-        $act = db()->prepare("SELECT * FROM lcup_acts WHERE branch_id = ? AND type = 'payment_created' AND (pay_id = ? OR (pay_id IS NULL AND state = 'open' AND ABS(amount - ?) < 0.5)) ORDER BY pay_id IS NULL, act_time DESC LIMIT 20");
+        $act = db()->prepare("SELECT * FROM lcup_acts WHERE (branch_id = ? OR branch_id IS NULL) AND type = 'payment_created' AND (pay_id = ? OR (pay_id IS NULL AND state = 'open' AND ABS(amount - ?) < 0.5)) ORDER BY pay_id IS NULL, act_time DESC LIMIT 20");
         $act->execute([$bid, $pay['pay_id'] ?? $key, $r['amount']]); $actRow = null;
         foreach ($act->fetchAll() as $a) { if (($pay && $a['pay_id'] === $pay['pay_id']) || (lc_norm((string)$a['student_name']) === lc_norm((string)$r['student_name']) && lc_norm((string)$a['group_name']) === lc_norm((string)$r['group']))) { $actRow = $a; break; } }
-        if ($actRow) db()->prepare("UPDATE lcup_acts SET state = 'deleted', pay_id = COALESCE(pay_id, ?) WHERE branch_id = ? AND act_id = ?")->execute([$pay['pay_id'] ?? $key, $bid, $actRow['act_id']]);
+        if ($actRow) db()->prepare("UPDATE lcup_acts SET state = 'deleted', pay_id = COALESCE(pay_id, ?) WHERE act_id = ?")->execute([$pay['pay_id'] ?? $key, $actRow['act_id']]);
         $created = $actRow['act_time'] ?? ($pay['created_at'] ?? null);
-        lcup_event_add(['type' => 'payment_deleted', 'branch_id' => $bid, 'source' => 'archive', 'staff' => $r['staff'] ?: null, 'student_id' => $actRow['student_id'] ?? ($pay['student_id'] ?? null),
+        // the archive's HODIM column is the person who CREATED the payment — stored as creator, never as the one who deleted it
+        lcup_event_add(['type' => 'payment_deleted', 'branch_id' => $bid, 'source' => 'archive', 'staff' => null, 'creator' => $r['staff'] ?: null, 'student_id' => $actRow['student_id'] ?? ($pay['student_id'] ?? null),
             'student_name' => $r['student_name'], 'group_name' => $r['group'], 'amount' => $r['amount'], 'method' => $r['method'], 'lcup_time' => $r['deleted_at'], 'created_at' => $created, 'reason' => $r['reason'],
-            'backfill' => $baseline || $old, 'details' => "O'chirilgan to'lov (" . ($r['date'] ?: '?') . " oyi uchun)" . ($created ? ', yaratilgan ' . date('d.m H:i', strtotime($created)) : '') . '. Sabab: ' . ($r['reason'] !== '' ? $r['reason'] : "ko'rsatilmagan") . ($pay ? '' : " · snapshotda mos to'lov topilmadi"),
+            'backfill' => $baseline || $old, 'details' => "O'chirilgan to'lov (" . ($r['date'] ?: '?') . " oyi uchun)" . ($created ? ', yaratilgan ' . date('d.m H:i', strtotime($created)) : '') . '. Sabab: ' . ($r['reason'] !== '' ? $r['reason'] : "ko'rsatilmagan") . ($r['staff'] ? ' · yaratgan: ' . $r['staff'] : '') . ($pay ? '' : " · snapshotda mos to'lov topilmadi"),
             'raw' => $r['raw'], 'dedupe_key' => "arch|$bid|$key"]);
     }
     return $new;
@@ -291,7 +310,7 @@ function lcup_pay_upsert(int $bid, array $r, string $region, bool $baseline, arr
         $pid = (int)db()->lastInsertId();
         if ($isNew) {
             $paired = lcup_pair_one($bid, $pid);
-            if (!$paired) lcup_event_add(['type' => 'payment_created', 'branch_id' => $bid, 'source' => 'snapshot', 'staff' => $r['staff'] ?: null, 'student_id' => $r['student_id'], 'student_name' => $r['student_name'], 'group_name' => $r['group'],
+            if (!$paired) lcup_event_add(['type' => 'payment_created', 'branch_id' => $bid, 'source' => 'snapshot', 'staff' => null, 'creator' => $r['staff'] ?: null, 'win_from' => lcup_state_get('last_success'), 'win_to' => $now, 'student_id' => $r['student_id'], 'student_name' => $r['student_name'], 'group_name' => $r['group'],
                 'amount' => $r['amount'], 'method' => $r['method'], 'lcup_time' => $r['created_at'], 'raw' => $r['raw'], 'details' => "To'lov ro'yxatda paydo bo'ldi (jurnalda topilmadi): " . lcup_amount_text($r['amount']) . ($r['group'] ? ' · ' . $r['group'] : ''),
                 'dedupe_key' => "snapc|$bid|$id"]);
         } else lcup_pair_one($bid, $pid);                            // an old row found late: still link it to its log record (original-amount check)
@@ -309,7 +328,7 @@ function lcup_pay_upsert(int $bid, array $r, string $region, bool $baseline, arr
     $actT = null; if ($old['act_id']) { $q = db()->prepare("SELECT act_time FROM lcup_acts WHERE branch_id = ? AND act_id = ?"); $q->execute([$bid, $old['act_id']]); $actT = $q->fetchColumn() ?: null; }
     if ($old['act_id'] && array_keys($chg) === ['amount']) return $id;       // lcup_check_amounts() reports it as "original -> current" (one alert, not two)
     $oldRow = ($old['baseline'] && !$old['created_at'] && !$actT);              // existed before we started watching: by definition not a fresh edit
-    lcup_event_add(['type' => 'payment_changed', 'branch_id' => $bid, 'source' => 'snapshot', 'staff' => $r['staff'] ?: $old['staff'], 'student_id' => $old['student_id'], 'student_name' => $r['student_name'], 'group_name' => $r['group'],
+    lcup_event_add(['type' => 'payment_edited', 'branch_id' => $bid, 'source' => 'snapshot', 'staff' => null, 'creator' => $r['staff'] ?: $old['staff'], 'win_from' => $old['last_seen'], 'win_to' => $now, 'student_id' => $old['student_id'], 'student_name' => $r['student_name'], 'group_name' => $r['group'],
         'amount' => $r['amount'], 'method' => $r['method'], 'before' => $b, 'after' => $a, 'created_at' => $actT ?: ($old['created_at'] ?: ($old['baseline'] ? null : $old['first_seen'])), 'is_charge' => (float)$old['amount'] < 0,
         'details' => lcup_change_text($b, $a) . ($region === 'night' ? ' (tungi tekshiruv)' : ''), 'raw' => $r['raw'], 'flags' => array_merge($weak ? ['weak'] : [], $oldRow ? ['late_edit'] : []), 'dedupe_key' => "snapu|$bid|$id|v" . ((int)$old['version'] + 1)]);
     return $id;
@@ -327,22 +346,22 @@ function lcup_resolve_missing(LcupClient $c, int $bid, array &$sum, float $deadl
     $q->execute([$bid]);
     foreach ($q->fetchAll() as $p) {
         db()->prepare("UPDATE lcup_payments SET deleted_at = ?, delete_info = 'arxivda topilmadi' WHERE id = ?")->execute([lcup_now(), $p['id']]);
-        db()->prepare("UPDATE lcup_acts SET state = 'deleted' WHERE branch_id = ? AND pay_id = ?")->execute([$bid, $p['pay_id']]);
-        lcup_event_add(['type' => 'payment_deleted', 'branch_id' => $bid, 'source' => 'snapshot', 'staff' => $p['staff'] ?: null, 'student_id' => $p['student_id'], 'student_name' => $p['student_name'], 'group_name' => $p['group_name'],
-            'amount' => $p['amount'], 'method' => $p['method'], 'created_at' => $p['created_at'] ?: $p['first_seen'], 'reason' => '', 'flags' => ['weak'],
-            'details' => "To'lov ro'yxatdan yo'qoldi va o'chirilganlar arxivida topilmadi (" . ($p['pay_date'] ?: '?') . " oyi uchun)", 'dedupe_key' => "miss|$bid|{$p['pay_id']}"]);
+        db()->prepare("UPDATE lcup_acts SET state = 'deleted' WHERE pay_id = ? AND (branch_id = ? OR branch_id IS NULL)")->execute([$p['pay_id'], $bid]);
+        lcup_event_add(['type' => 'payment_deleted', 'branch_id' => $bid, 'source' => 'snapshot', 'staff' => null, 'creator' => $p['staff'] ?: null, 'win_from' => $p['last_seen'], 'win_to' => lcup_now(), 'student_id' => $p['student_id'], 'student_name' => $p['student_name'], 'group_name' => $p['group_name'],
+            'amount' => $p['amount'], 'method' => $p['method'], 'created_at' => $p['created_at'] ?: $p['first_seen'], 'reason' => '', 
+            'details' => "To'lov ro'yxatdan yo'qoldi va o'chirilganlar arxivida topilmadi (" . ($p['pay_date'] ?: '?') . " oyi uchun) · kim o'chirgani Tarixdan aniqlanadi", 'dedupe_key' => "miss|$bid|{$p['pay_id']}"]);
     }
 }
 
 /* ============================================================== pairing log "yaratildi" <-> list row, and the ORIGINAL-amount check */
 function lcup_pair_apply(int $bid, array $act, array $pay): void {
-    db()->prepare("UPDATE lcup_acts SET pay_id = ?, state = 'paired', paired_at = ?, cur_amount = ? WHERE branch_id = ? AND act_id = ?")->execute([$pay['pay_id'], lcup_now(), $pay['amount'], $bid, $act['act_id']]);
+    db()->prepare("UPDATE lcup_acts SET pay_id = ?, state = 'paired', paired_at = ?, cur_amount = ?, branch_id = COALESCE(branch_id, ?) WHERE act_id = ?")->execute([$pay['pay_id'], lcup_now(), $pay['amount'], $bid, $act['act_id']]);
     db()->prepare("UPDATE lcup_payments SET act_id = ?, student_id = COALESCE(student_id, ?) WHERE id = ?")->execute([$act['act_id'], $act['student_id'], $pay['id']]);
 }
 /** Pair one list row with an unpaired log record of the same student + group (exact amount first). Times use OUR clock (first_seen) so LC-UP's clock/timezone never matters. */
 function lcup_pair_one(int $bid, int $pid): bool {
     $st = db()->prepare("SELECT * FROM lcup_payments WHERE id = ?"); $st->execute([$pid]); $p = $st->fetch(); if (!$p || $p['act_id']) return false;
-    $a = db()->prepare("SELECT * FROM lcup_acts WHERE branch_id = ? AND type = 'payment_created' AND pay_id IS NULL AND state = 'open' AND amount IS NOT NULL AND student_name = ? COLLATE NOCASE");
+    $a = db()->prepare("SELECT * FROM lcup_acts WHERE (branch_id = ? OR branch_id IS NULL) AND type = 'payment_created' AND pay_id IS NULL AND state = 'open' AND amount IS NOT NULL AND student_name = ? COLLATE NOCASE");
     $a->execute([$bid, $p['student_name']]); $best = null; $bs = null;
     foreach ($a->fetchAll() as $act) {
         if (lc_norm((string)$act['group_name']) !== lc_norm((string)$p['group_name'])) continue;
@@ -356,7 +375,7 @@ function lcup_pair_one(int $bid, int $pid): bool {
 }
 /** Pair log records that did not find their row yet (rows found later by warm/night scans, or edited before the first look). */
 function lcup_pair_pending(int $bid, array &$sum): void {
-    $a = db()->prepare("SELECT * FROM lcup_acts WHERE branch_id = ? AND type = 'payment_created' AND pay_id IS NULL AND state = 'open' AND amount IS NOT NULL AND amount > 0 AND act_time >= ?");
+    $a = db()->prepare("SELECT * FROM lcup_acts WHERE (branch_id = ? OR branch_id IS NULL) AND type = 'payment_created' AND pay_id IS NULL AND state = 'open' AND amount IS NOT NULL AND amount > 0 AND act_time >= ?");
     $a->execute([$bid, date('Y-m-d H:i:s', strtotime('-' . ((int)lcup_num('window_days') + 5) . ' days'))]);
     foreach ($a->fetchAll() as $act) {
         $c = db()->prepare("SELECT * FROM lcup_payments WHERE branch_id = ? AND act_id IS NULL AND deleted_at IS NULL AND student_name = ? COLLATE NOCASE");
@@ -379,11 +398,12 @@ function lcup_check_amounts(int $bid, array &$sum): void {
     $q->execute([$bid]);
     foreach ($q->fetchAll() as $a) {
         $diff = (float)$a['pamount'] - (float)$a['amount'];
-        lcup_event_add(['type' => 'amount_changed', 'branch_id' => $bid, 'source' => 'reconcile', 'staff' => $a['staff'], 'student_id' => $a['student_id'], 'student_name' => $a['student_name'], 'group_name' => $a['group_name'],
+        // the person in the log row CREATED the payment; who edited it comes from the log / Tarix (merged into the same incident)
+        lcup_event_add(['type' => 'payment_edited', 'branch_id' => $bid, 'source' => 'reconcile', 'staff' => null, 'creator' => $a['staff'], 'win_from' => $a['paired_at'] ?: $a['act_time'], 'win_to' => lcup_now(), 'student_id' => $a['student_id'], 'group_id' => $a['group_id'], 'student_name' => $a['student_name'], 'group_name' => $a['group_name'],
             'amount' => $a['pamount'], 'method' => $a['pmethod'], 'created_at' => $a['act_time'], 'before' => ['amount' => (float)$a['amount']], 'after' => ['amount' => (float)$a['pamount']],
             'details' => "Yaratilganda: " . lcup_amount_text($a['amount']) . " → hozir: " . lcup_amount_text($a['pamount']) . " (farq " . fmt_signed($diff) . ") · yaratilgan " . date('d.m H:i', strtotime($a['act_time'])),
             'dedupe_key' => "amt|$bid|{$a['act_id']}|" . (int)round($a['pamount'])]);
-        db()->prepare("UPDATE lcup_acts SET alert_amount = ? WHERE branch_id = ? AND act_id = ?")->execute([$a['pamount'], $bid, $a['act_id']]);
+        db()->prepare("UPDATE lcup_acts SET alert_amount = ? WHERE act_id = ?")->execute([$a['pamount'], $a['act_id']]);
     }
 }
 
@@ -404,7 +424,7 @@ function lcup_nightly_slice(LcupClient $c, int $bid, array &$sum, float $deadlin
             $a = lcup_fetch_page($c, $bid, lcup_setting('archive_url'), (int)$st['arch'], 'archive', $sum);
             if ($a) lcup_archive_rows($bid, $a['rows'], false);
             $st['arch']++;
-            if (!$a || !$a['rows'] || !$a['page']['has_next'] || $st['arch'] > $maxP) $st['phase'] = lcup_setting('allow_switch_post') === '1' ? 'slist' : 'finish';
+            if (!$a || !$a['rows'] || !$a['page']['has_next'] || $st['arch'] > $maxP) $st['phase'] = 'slist';
         } else {                                                     // slist: collect the student ids of this branch
             $sp = (int)$st['sl']; $r = $sp <= 1 ? $c->page(lcup_setting('students_url')) : $c->page(lcup_setting('students_url'), ['page' => $sp]);
             $l = lcup_parse_students_list($r['body']); $pi = lc_page_info(lc_dom($r['body'])); $added = 0;
@@ -427,11 +447,11 @@ function lcup_nightly_slice(LcupClient $c, int $bid, array &$sum, float $deadlin
         // every payment that the full walk did NOT see counts twice towards "vanished" (needs two nights, or the archive row)
         db()->prepare("UPDATE lcup_payments SET miss_n = miss_n + 2, missing_since = COALESCE(missing_since, ?) WHERE branch_id = ? AND deleted_at IS NULL AND last_seen < ?")->execute([lcup_now(), $bid, $st['started']]);
         lcup_pair_pending($bid, $sum);
-        $o = db()->prepare("SELECT * FROM lcup_acts WHERE branch_id = ? AND type = 'payment_created' AND pay_id IS NULL AND state = 'open' AND amount > 0 AND act_time < ?");
-        $o->execute([$bid, date('Y-m-d H:i:s', strtotime('-2 days'))]);
+        $o = db()->prepare("SELECT * FROM lcup_acts WHERE (branch_id = ? OR (branch_id IS NULL AND read_branch = ?)) AND type = 'payment_created' AND pay_id IS NULL AND state = 'open' AND amount > 0 AND act_time < ?");
+        $o->execute([$bid, $bid, date('Y-m-d H:i:s', strtotime('-2 days'))]);
         foreach ($o->fetchAll() as $a) {
-            db()->prepare("UPDATE lcup_acts SET state = 'orphan' WHERE branch_id = ? AND act_id = ?")->execute([$bid, $a['act_id']]);
-            lcup_event_add(['type' => 'payment_missing', 'branch_id' => $bid, 'source' => 'reconcile', 'staff' => $a['staff'], 'student_id' => $a['student_id'], 'student_name' => $a['student_name'], 'group_name' => $a['group_name'],
+            db()->prepare("UPDATE lcup_acts SET state = 'orphan' WHERE act_id = ?")->execute([$a['act_id']]);
+            lcup_event_add(['type' => 'payment_deleted', 'branch_id' => $bid, 'source' => 'snapshot', 'staff' => null, 'creator' => $a['staff'], 'win_from' => $a['act_time'], 'win_to' => lcup_now(), 'group_id' => $a['group_id'], 'student_id' => $a['student_id'], 'student_name' => $a['student_name'], 'group_name' => $a['group_name'],
                 'amount' => $a['amount'], 'flags' => ['deleted', 'no_reason'], 'created_at' => $a['act_time'], 'details' => "Jurnalda " . date('d.m H:i', strtotime($a['act_time'])) . " da yaratilgan to'lov ro'yxatda ham, arxivda ham topilmadi (talaba nomi o'zgargan bo'lishi mumkin)", 'dedupe_key' => "orphan|$bid|{$a['act_id']}"]);
         }
         $st['done'] = 1; lcup_state_set("night_last_$bid", lcup_now() . ' · ' . $st['pages'] . ' sahifa' . ($st['students'] ? ', ' . $st['students'] . " o'quvchi" : ''));
@@ -453,38 +473,26 @@ function lcup_fetch_table_pages(LcupClient $c, int $bid, string $url, string $ki
     }
     return $rows;
 }
-function lcup_check_debts(LcupClient $c, int $bid, array &$sum, float $deadline): void {
-    $url = lcup_setting('debtors_url'); if ($url === '') return;
-    $last = lcup_state_get("debt_last_$bid"); if ($last && time() - (int)$last < max(0, (int)lcup_num('debt_interval')) * 60 - 5) return;
-    $new = lcup_fetch_table_pages($c, $bid, $url, 'debt', $sum, $deadline); lcup_state_set("debt_last_$bid", time());
-    $old = db()->prepare("SELECT * FROM lcup_debts WHERE branch_id = ?"); $old->execute([$bid]); $old = $old->fetchAll();
-    $base = !lcup_state_get("base_debt_$bid");
-    if (!$base && count($old) >= 10 && count($new) < 0.5 * count($old)) { $sum['warnings'][] = (branch_get($bid)['name'] ?? $bid) . ": qarzdorlar ro'yxati keskin qisqardi (" . count($old) . " → " . count($new) . ") — tekshiruv o'tkazib yuborildi."; return; }
-    if (!$base) foreach ($old as $o) {
-        $nd = isset($new[$o['d_key']]) ? (float)$new[$o['d_key']]['debt'] : 0.0; $delta = (float)$o['debt'] - $nd; if ($delta < 1) continue;
-        $cov = db()->prepare("SELECT COALESCE(SUM(amount),0) FROM lcup_acts WHERE branch_id = ? AND type = 'payment_created' AND amount > 0 AND first_seen >= ? AND (student_id = ? OR student_name = ? COLLATE NOCASE)");
-        $cov->execute([$bid, date('Y-m-d H:i:s', strtotime($o['updated_at'] . ' -10 minutes')), $o['student_id'], $o['student_name']]);
-        if ($delta <= (float)$cov->fetchColumn() * 1.02) continue;                      // a payment explains it
-        // who was working with charges at that moment? ("minus to'lov tahrirlandi" rows carry neither student nor amount)
-        $lg = db()->prepare("SELECT act_id, staff, act_time FROM lcup_acts WHERE branch_id = ? AND type = 'log_edit' AND first_seen >= ? ORDER BY act_time DESC LIMIT 5");
-        $lg->execute([$bid, date('Y-m-d H:i:s', strtotime($o['updated_at'] . ' -15 minutes'))]); $logs = $lg->fetchAll();
-        $staffs = array_values(array_unique(array_filter(array_column($logs, 'staff')))); $who = count($staffs) === 1 ? $staffs[0] : null;
-        $link = $logs ? " · jurnal: «minus to'lov tahrirlandi» " . date('H:i', strtotime($logs[0]['act_time'])) . ($staffs ? ' (' . implode(', ', $staffs) . ')' : '') : '';
-        lcup_event_add(['type' => 'debt_reduced', 'branch_id' => $bid, 'source' => 'debtors', 'staff' => $who, 'student_id' => $o['student_id'], 'student_name' => $o['student_name'], 'group_name' => $o['group_name'] ?? null, 'amount' => $delta,
-            'before' => ['debt' => (float)$o['debt']], 'after' => ['debt' => $nd],
-            'details' => "Qarz " . fmt($o['debt']) . " → " . fmt($nd) . " (−" . fmt($delta) . ($nd < 0.5 ? ", ro'yxatdan chiqdi" : '') . "), mos to'lov jurnalda topilmadi" . $link, 'dedupe_key' => "debt|$bid|{$o['d_key']}|" . (int)$nd . '|' . date('YmdHi')]);
+/* debtors: lcup_debtrep.php (signed balances, day snapshots, unexplained decreases) */
+
+/* ============================================================== group id -> branch (each branch's /admin/groups, nightly and when an unknown group id shows up) */
+function lcup_sync_groups(LcupClient $c, int $bid, array &$sum, float $deadline): void {
+    $url = lcup_setting('groups_url'); if ($url === '') return;
+    $force = lcup_state_get('groups_force') === '1' && (int)lcup_state_get("groups_force_try_$bid", 0) < time() - 3600;
+    if (lcup_state_get("groups_day_$bid") === date('Y-m-d') && !$force) return;
+    if ($force) lcup_state_set("groups_force_try_$bid", time());
+    $now = lcup_now(); $n = 0; $ok = false;
+    $up = db()->prepare("INSERT INTO lcup_groups (group_id, name, branch_id, first_seen, last_seen) VALUES (?,?,?,?,?) ON CONFLICT(group_id) DO UPDATE SET name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE lcup_groups.name END, branch_id = excluded.branch_id, last_seen = excluded.last_seen");
+    for ($pg = 1; $pg <= 60 && microtime(true) < $deadline - 2; $pg++) {
+        $r = $pg === 1 ? $c->page($url) : $c->page($url, ['page' => $pg]); $g = lcup_parse_groups($r['body']);
+        if (!$g['structure']) { if ($pg === 1) throw new LcupError("Guruhlar ro'yxati tanilmadi ($url).", 'layout'); break; }
+        if ($pg > 1 && $g['page']['page'] !== $pg) break;
+        foreach ($g['groups'] as $x) { $up->execute([$x['id'], $x['name'], $bid, $now, $now]); $n++; }
+        if (!$g['page']['has_next']) { $ok = true; break; }
     }
-    if (!$base) {                                                                       // remember WHO's debt moved: candidates for "minus to'lov tahrirlandi" rows (lcup_edits.php)
-        $chg = json_decode((string)lcup_state_get("debt_changed_$bid", '[]'), true) ?: []; $cut = date('Y-m-d H:i:s', strtotime('-60 minutes')); $chg = array_values(array_filter($chg, function ($x) use ($cut) { return ($x['at'] ?? '') >= $cut; }));
-        $oldMap = []; foreach ($old as $o) $oldMap[$o['d_key']] = $o;
-        foreach ($new as $k => $x) { $od = isset($oldMap[$k]) ? (float)$oldMap[$k]['debt'] : null; if (($od === null || abs($od - (float)$x['debt']) >= 1) && $x['student_id']) $chg[] = ['sid' => (string)$x['student_id'], 'name' => $x['student_name'], 'at' => lcup_now()]; }
-        foreach ($oldMap as $k => $o) if (!isset($new[$k]) && $o['student_id']) $chg[] = ['sid' => (string)$o['student_id'], 'name' => $o['student_name'], 'at' => lcup_now()];
-        lcup_state_set("debt_changed_$bid", json_encode(array_slice($chg, -200), JSON_UNESCAPED_UNICODE));
-    }
-    db()->prepare("DELETE FROM lcup_debts WHERE branch_id = ?")->execute([$bid]);
-    $ins = db()->prepare("INSERT OR REPLACE INTO lcup_debts (branch_id, d_key, student_id, student_name, group_name, debt, updated_at) VALUES (?,?,?,?,?,?,?)");
-    foreach ($new as $x) $ins->execute([$bid, $x['key'], $x['student_id'], $x['student_name'], $x['group'] ?? '', $x['debt'], lcup_now()]);
-    lcup_state_set("base_debt_$bid", '1');
+    if ($ok) { lcup_state_set("groups_day_$bid", date('Y-m-d')); lcup_state_set("groups_n_$bid", $n);
+        $all = true; foreach (lcup_branch_ids() as $b) if (lcup_state_get("groups_day_$b") !== date('Y-m-d')) $all = false;
+        if ($all) { lcup_state_del('groups_force'); lcup_acts_derive_branches(true); } }
 }
 function lcup_check_discounts(LcupClient $c, int $bid, array &$sum, float $deadline): void {
     $url = lcup_setting('discount_url'); if ($url === '') return;
@@ -502,8 +510,8 @@ function lcup_check_discounts(LcupClient $c, int $bid, array &$sum, float $deadl
     }
     $mass = count($evs) > 15;                                        // e.g. the report switched to a new month: one summary instead of a flood
     foreach ($evs as [$type, $x, $o]) {
-        $verb = $type === 'discount_removed' ? "Chegirma o'chirildi: " : 'Chegirma: ';
-        lcup_event_add(['type' => $type, 'branch_id' => $bid, 'source' => 'discounts', 'staff' => $x['staff'] ?: null, 'student_id' => $x['student_id'], 'student_name' => $x['student_name'], 'group_name' => $x['group'], 'amount' => $x['num'],
+        $verb = $type === 'discount_removed' ? "Chegirma o'chirildi: " : ($type === 'discount_new' ? 'Yangi chegirma: ' : "Chegirma o'zgardi: ");
+        lcup_event_add(['type' => 'discount', 'branch_id' => $bid, 'source' => 'discounts', 'staff' => $type === 'discount_new' ? ($x['staff'] ?: null) : null, 'creator' => $x['staff'] ?: null, 'student_id' => $x['student_id'], 'student_name' => $x['student_name'], 'group_name' => $x['group'], 'amount' => $x['num'],
             'before' => $o ? ['num' => (float)$o['num'], 'value' => $o['value']] : null, 'after' => $type === 'discount_removed' ? null : ['num' => (float)$x['num'], 'value' => $x['value']], 'info_only' => $mass,
             'details' => $verb . $x['value'] . ($o && $type === 'discount_changed' ? " (oldin: " . $o['value'] . ")" : '') . ($x['reason'] ? " · sabab: " . $x['reason'] : '') . ($mass ? ' · ommaviy o‘zgarish' : ''), 'dedupe_key' => "disc|$bid|{$x['key']}|$type|" . sha1($x['value'] . microtime())]);
     }
@@ -517,10 +525,8 @@ function lcup_check_discounts(LcupClient $c, int $bid, array &$sum, float $deadl
 /** The student "To'lovlar" tab is filled by Livewire.emit('studentTolovlarOchilsin', id) — whitelisted, read-only. Returns the negative / monthly rows. */
 function lcup_student_charges(LcupClient $c, string $sid, ?int $bid = null): array {
     $page = $c->view_page('/admin/students/' . rawurlencode($sid));
-    if ($bid !== null) {                                                                 // the same GET also carries the "Tarix" rows: keep them (dedupe by hash), no extra request
-        $h = lcup_parse_student_history($page['html']);
-        if (!$h['rows'] && lcup_setting('history_via_livewire') === '1') { $fh = $c->view_history($page, $sid); if ($fh) $h = lcup_parse_student_history(implode("\n", $fh)); }
-        lcup_history_store($bid, $sid, $h['rows']);
+    if ($bid !== null) {                                                                 // the same page also gives the "Tarix" rows (one whitelisted call to students.history-livewire)
+        $fh = $c->view_history($page, $sid); if ($fh) lcup_history_store($bid, $sid, lcup_parse_student_history(implode("\n", $fh))['rows']);
     }
     $frags = $c->view_emit($page, 'studentTolovlarOchilsin', [(string)$sid]);
     if (!$frags) throw new LcupError("O'quvchi sahifasida «To'lovlar» komponenti topilmadi (#$sid).", 'layout');

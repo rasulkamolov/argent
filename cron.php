@@ -1,31 +1,22 @@
 <?php
 /**
- * LC-UP sync entry point. Run every minute:
- *   Hostinger cron (CLI):  /usr/bin/php /home/uXXXX/domains/oxfordlc.uz/public_html/argent/cron.php
- *   cron-job.org (HTTP):   https://oxfordlc.uz/argent/cron.php?token=<CRON_TOKEN from argent_private/config.php>
- * Answers with one plain-text line. HTTP 500 = the run failed (cron-job.org can e-mail you about that).
+ * Monitoring run (LC-UP + Do'konPro). Hostinger → Cron Jobs, every minute (* * * * *):
+ *   /usr/bin/php /home/u180105715/domains/oxfordlc.uz/public_html/kirimchiqim/argent/cron.php
+ * Command line only: a web request to this file is refused (there is no HTTP cron / token any more).
+ * Prints one plain-text line; exit code 1 = the run failed.
  */
+if (PHP_SAPI !== 'cli') { http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); echo "Not found\n"; exit; }
 define('ARGENT_NO_SESSION', 1);
 require_once __DIR__ . '/lcup_sync.php';
 
-$cli = PHP_SAPI === 'cli';
-if (!$cli) {
-    header('Content-Type: text/plain; charset=utf-8'); header('Cache-Control: no-store'); header('X-Robots-Tag: noindex');
-    $want = (string)cfg('CRON_TOKEN', '');
-    if ($want === '') { http_response_code(503); echo "CRON_TOKEN argent_private/config.php da sozlanmagan\n"; exit; }
-    $got = (string)($_GET['token'] ?? '');
-    if (!hash_equals($want, $got)) { http_response_code(403); echo "Forbidden\n"; exit; }
-}
-$r = lcup_run(['trigger' => $cli ? 'cron-cli' : 'cron-http']);
+$r = lcup_run(['trigger' => 'cron-cli']);
 // Do'konPro monitoring (read-only on the shop). Independent of LC-UP: its failure never hides the LC-UP result and vice versa.
-$shopLine = '';
-try { require_once __DIR__ . '/shop_report.php'; $sr = shop_run(['trigger' => $cli ? 'cron-cli' : 'cron-http']);
+$shopLine = ''; $shopFail = [];
+try { require_once __DIR__ . '/shop_report.php'; $sr = shop_run(['trigger' => 'cron-cli']);
     $shopLine = $sr['skipped'] ? ' shop=skipped(' . $sr['skipped'] . ')' : ($sr['busy'] ? ' shop=busy' : ' shop=' . ($sr['ok'] ? 'ok' : 'FAIL') . ' shop_new_events=' . $sr['new_events']);
-    if (!$sr['ok'] && !$cli) { $shopFail = $sr['errors']; } } catch (Throwable $e) { $shopLine = ' shop=FAIL'; $shopFail = ['Ichki xatolik: ' . get_class($e)]; error_log('shop run: ' . $e->getMessage()); }
-if (!empty($r['busy'])) { echo "BUSY\n"; exit(0); }
-$line = ($r['ok'] ? 'OK' : 'FAIL') . " requests={$r['requests']} new_events={$r['new_events']}" . ($r['errors'] ? ' errors=' . count($r['errors']) : '') . $shopLine;
-if ((!$r['ok'] || !empty($shopFail)) && !$cli) { http_response_code(500); }
-echo $line . "\n";
-if (!$r['ok']) foreach ($r['errors'] as $e) echo ' - ' . $e . "\n";
-foreach (($shopFail ?? []) as $e) echo ' - shop: ' . $e . "\n";
-exit($r['ok'] && empty($shopFail) ? 0 : 1);
+    if (!$sr['ok']) $shopFail = $sr['errors']; } catch (Throwable $e) { $shopLine = ' shop=FAIL'; $shopFail = ['Ichki xatolik: ' . get_class($e)]; error_log('shop run: ' . $e->getMessage()); }
+if (!empty($r['busy'])) { echo "BUSY" . $shopLine . "\n"; exit(0); }
+echo ($r['ok'] ? 'OK' : 'FAIL') . " requests={$r['requests']} new_events={$r['new_events']}" . ($r['errors'] ? ' errors=' . count($r['errors']) : '') . $shopLine . "\n";
+foreach ($r['errors'] as $e) echo ' - ' . $e . "\n";
+foreach ($shopFail as $e) echo ' - shop: ' . $e . "\n";
+exit($r['ok'] && !$shopFail ? 0 : 1);

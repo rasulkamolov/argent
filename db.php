@@ -12,7 +12,7 @@ if (!defined('DB_FILE')) {
     define('DB_FILE', db_resolve_file());
 }
 if (!defined('DEFAULT_BRANCH_NAME')) define('DEFAULT_BRANCH_NAME', "OXFORD Bo'zqal'a");
-const DB_SCHEMA_VERSION = 9;   // v9: Do'konPro monitoring, v2: multi-branch, v3: balance_ok, v4/v5: proof, v6: LC-UP monitoring, v7: whitelist log, charges, gaps, v8: student history (minus-payment edits)
+const DB_SCHEMA_VERSION = 10;  // v10: LC-UP incidents/corrections/group map/debt snapshots, v9: Do'konPro monitoring, v2: multi-branch, v3: balance_ok, v4/v5: proof, v6: LC-UP monitoring, v7: whitelist log, charges, gaps, v8: student history (minus-payment edits)
 
 function db_has_column(PDO $c, string $table, string $col): bool {
     foreach ($c->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -344,6 +344,96 @@ function db_migrate(PDO $c): void {
             if ($yb) $m->execute([$yb, 'Asosiy filial']);
             if ($ox) $m->execute([$ox, 'Oxford Bozqala']);
         }
+
+        /* ---- v10: LC-UP accuracy — one row per LC-UP log row, group -> branch map, incidents + corrections, debt snapshots, accuracy checks ---- */
+        // lcup_acts: the LC-UP row id (wire:key "xf-row-NNNN") is the ONLY key. A center-wide user's row seen in both branch views is one row;
+        // branch_id is derived from the group/student (NULL = "aniqlanmoqda"), read_branch / seen_in only say where it was read.
+        if (!db_has_column($c, 'lcup_acts', 'seen_in')) {
+            $c->exec("CREATE TABLE lcup_acts_v10 (
+                act_id TEXT PRIMARY KEY, branch_id INTEGER, read_branch INTEGER, seen_in TEXT DEFAULT '',
+                staff TEXT, act_time TEXT, act_text TEXT, type TEXT, student_id TEXT, student_name TEXT, group_id TEXT, group_name TEXT,
+                amount REAL, old_amount REAL, pay_id TEXT, state TEXT DEFAULT 'open', cur_amount REAL, alert_amount REAL, first_seen TEXT, paired_at TEXT, backfill INTEGER DEFAULT 0
+            )");
+            $c->exec("INSERT OR IGNORE INTO lcup_acts_v10 (act_id, branch_id, read_branch, seen_in, staff, act_time, act_text, type, student_id, student_name, group_id, group_name, amount, pay_id, state, cur_amount, alert_amount, first_seen, paired_at, backfill)
+                SELECT a.act_id, CASE WHEN (SELECT COUNT(DISTINCT b.branch_id) FROM lcup_acts b WHERE b.act_id = a.act_id) = 1 THEN a.branch_id ELSE NULL END, a.branch_id,
+                       (SELECT group_concat(DISTINCT b.branch_id) FROM lcup_acts b WHERE b.act_id = a.act_id), a.staff, a.act_time, a.act_text, a.type, a.student_id, a.student_name, a.group_id, a.group_name, a.amount, a.pay_id, a.state, a.cur_amount, a.alert_amount, a.first_seen, a.paired_at, a.backfill
+                FROM lcup_acts a ORDER BY a.first_seen, a.rowid");
+            $c->exec("DROP TABLE lcup_acts");
+            $c->exec("ALTER TABLE lcup_acts_v10 RENAME TO lcup_acts");
+        }
+        // one name per action type (the old pairs log_edit/log_delete are merged)
+        $c->exec("UPDATE lcup_acts SET type = 'charge_edited' WHERE type = 'log_edit' AND act_text LIKE '%minus%'");
+        $c->exec("UPDATE lcup_acts SET type = 'payment_edited' WHERE type = 'log_edit'");
+        $c->exec("UPDATE lcup_acts SET type = 'payment_deleted' WHERE type = 'log_delete'");
+        $c->exec("UPDATE lcup_acts SET type = 'balance_edited' WHERE type = 'payment_other' AND lower(act_text) LIKE '%balans%'");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcact_time2 ON lcup_acts(branch_id, act_time)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcact_state2 ON lcup_acts(state, type)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcact_student ON lcup_acts(student_id, act_time)");
+        $c->exec("DROP INDEX IF EXISTS idx_lcact_time"); $c->exec("DROP INDEX IF EXISTS idx_lcact_state");
+        // evidence columns: who CREATED the payment (HODIM column of lists/archive) is never the actor; time window of snapshot-only detections
+        foreach (['creator' => 'TEXT', 'group_id' => 'TEXT', 'act_id' => 'TEXT', 'win_from' => 'TEXT', 'win_to' => 'TEXT'] as $col => $def) db_add_column($c, 'lcup_events', $col, $def);
+        $c->exec("DROP TRIGGER IF EXISTS lcup_events_noupdate");
+        $c->exec("CREATE TRIGGER lcup_events_noupdate BEFORE UPDATE ON lcup_events
+            WHEN OLD.id IS NOT NEW.id OR OLD.detected_at IS NOT NEW.detected_at OR OLD.lcup_time IS NOT NEW.lcup_time OR OLD.event_date IS NOT NEW.event_date
+              OR OLD.branch_id IS NOT NEW.branch_id OR OLD.source IS NOT NEW.source OR OLD.type IS NOT NEW.type OR OLD.staff IS NOT NEW.staff
+              OR OLD.student_id IS NOT NEW.student_id OR OLD.student_name IS NOT NEW.student_name OR OLD.group_name IS NOT NEW.group_name
+              OR OLD.amount IS NOT NEW.amount OR OLD.method IS NOT NEW.method OR OLD.before_json IS NOT NEW.before_json OR OLD.after_json IS NOT NEW.after_json
+              OR OLD.details IS NOT NEW.details OR OLD.raw IS NOT NEW.raw OR OLD.severity IS NOT NEW.severity OR OLD.flags IS NOT NEW.flags
+              OR OLD.backfill IS NOT NEW.backfill OR OLD.dedupe_key IS NOT NEW.dedupe_key
+              OR OLD.creator IS NOT NEW.creator OR OLD.group_id IS NOT NEW.group_id OR OLD.act_id IS NOT NEW.act_id OR OLD.win_from IS NOT NEW.win_from OR OLD.win_to IS NOT NEW.win_to
+              OR (OLD.reviewed_at IS NOT NULL AND (NEW.reviewed_at IS NOT OLD.reviewed_at OR NEW.reviewed_by IS NOT OLD.reviewed_by OR NEW.review_note IS NOT OLD.review_note))
+              OR (OLD.alerted_at IS NOT NULL AND NEW.alerted_at IS NOT OLD.alerted_at)
+            BEGIN SELECT RAISE(ABORT, 'lcup_events: yozuvlarni o''zgartirib bo''lmaydi'); END");
+        // group id -> branch (from each branch's /admin/groups, refreshed nightly). Group ids are unique in LC-UP.
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_groups (group_id TEXT PRIMARY KEY, name TEXT, branch_id INTEGER NOT NULL, first_seen TEXT, last_seen TEXT)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcgrp_name ON lcup_groups(name)");
+        // student "Tarix" rows: old -> new and the action kind
+        foreach (['kind' => 'TEXT', 'old_amount' => 'REAL', 'new_amount' => 'REAL'] as $col => $def) db_add_column($c, 'lcup_history', $col, $def);
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lchist_student ON lcup_history(student_id, at)");
+        // incidents: ONE row per real action, built from all evidence (log, archive, snapshot, Tarix). Derived data: rebuilt by tools/lcup_reprocess.php.
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_incidents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, severity TEXT DEFAULT 'info', flags TEXT DEFAULT '',
+            branch_id INTEGER, branch_src TEXT, student_id TEXT, student_name TEXT, group_id TEXT, group_name TEXT,
+            amount REAL, old_amount REAL, new_amount REAL, method TEXT,
+            actor TEXT, actor_src TEXT, creator TEXT, at TEXT, win_from TEXT, win_to TEXT,
+            sources TEXT DEFAULT '', confidence TEXT DEFAULT 'estimated', leader INTEGER DEFAULT 0, details TEXT, related_id INTEGER,
+            first_detected TEXT, updated_at TEXT, backfill INTEGER DEFAULT 0, hold_until TEXT,
+            alerted_at TEXT, alerted_sig TEXT, corrected_at TEXT, correction TEXT, correction_reported INTEGER DEFAULT 0,
+            tarix_checked_at TEXT, tarix_tries INTEGER DEFAULT 0,
+            reviewed_at TEXT, reviewed_by INTEGER, review_note TEXT
+        )");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcinc_at ON lcup_incidents(at)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcinc_student ON lcup_incidents(student_id, kind)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcinc_unread ON lcup_incidents(severity, reviewed_at, backfill)");
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_incident_events (event_id INTEGER PRIMARY KEY, incident_id INTEGER NOT NULL)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcie_inc ON lcup_incident_events(incident_id)");
+        // corrections: append-only, linked to the original (never changed) event
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_corrections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, event_id INTEGER NOT NULL, incident_id INTEGER,
+            field TEXT NOT NULL, original TEXT, corrected TEXT, reason TEXT, UNIQUE (event_id, field, corrected)
+        )");
+        $c->exec("CREATE TRIGGER IF NOT EXISTS lcup_corrections_noupdate BEFORE UPDATE ON lcup_corrections BEGIN SELECT RAISE(ABORT, 'lcup_corrections: o''zgartirib bo''lmaydi'); END");
+        $c->exec("CREATE TRIGGER IF NOT EXISTS lcup_corrections_nodelete BEFORE DELETE ON lcup_corrections BEGIN SELECT RAISE(ABORT, 'lcup_corrections: o''chirib bo''lmaydi'); END");
+        // debtors: signed balance + comment + groups (state of the last sync); day snapshots are append-only
+        if (!db_has_column($c, 'lcup_debts', 'balance')) {
+            $c->exec("CREATE TABLE lcup_debts_v10 (branch_id INTEGER NOT NULL, d_key TEXT NOT NULL, student_id TEXT, student_name TEXT, group_name TEXT DEFAULT '', balance REAL, comment TEXT DEFAULT '', updated_at TEXT, changed_at TEXT, PRIMARY KEY (branch_id, d_key))");
+            $c->exec("INSERT OR IGNORE INTO lcup_debts_v10 (branch_id, d_key, student_id, student_name, group_name, balance, updated_at, changed_at) SELECT branch_id, d_key, student_id, student_name, group_name, -ABS(debt), updated_at, updated_at FROM lcup_debts");
+            $c->exec("DROP TABLE lcup_debts"); $c->exec("ALTER TABLE lcup_debts_v10 RENAME TO lcup_debts");
+        }
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_debt_snaps (id INTEGER PRIMARY KEY AUTOINCREMENT, branch_id INTEGER NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, taken_at TEXT NOT NULL, jami REAL, cnt INTEGER, rows_n INTEGER, UNIQUE (branch_id, day, kind))");
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_debt_snap_rows (snap_id INTEGER NOT NULL, student_id TEXT, d_key TEXT NOT NULL, student_name TEXT, groups TEXT, balance REAL, comment TEXT, PRIMARY KEY (snap_id, d_key))");
+        foreach (['lcup_debt_snaps', 'lcup_debt_snap_rows'] as $t) {
+            $c->exec("CREATE TRIGGER IF NOT EXISTS {$t}_noupdate BEFORE UPDATE ON $t BEGIN SELECT RAISE(ABORT, '$t: o''zgartirib bo''lmaydi'); END");
+            $c->exec("CREATE TRIGGER IF NOT EXISTS {$t}_nodelete BEFORE DELETE ON $t BEGIN SELECT RAISE(ABORT, '$t: o''chirib bo''lmaydi'); END");
+        }
+        // a debt that went down with nothing behind it yet (re-checked after a grace period)
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_debt_pending (branch_id INTEGER NOT NULL, d_key TEXT NOT NULL, student_id TEXT, student_name TEXT, group_name TEXT, prev_balance REAL, new_balance REAL, from_at TEXT, at TEXT, state TEXT DEFAULT 'open', PRIMARY KEY (branch_id, d_key, at))");
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_leavers (branch_id INTEGER NOT NULL, student_id TEXT NOT NULL, day TEXT NOT NULL, reason TEXT, checked_at TEXT, PRIMARY KEY (branch_id, student_id, day))");
+        // accuracy check: 10 random incidents a day re-read from the student's Tarix
+        $c->exec("CREATE TABLE IF NOT EXISTS lcup_accuracy (id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, checked_at TEXT, incident_id INTEGER, actor_ok INTEGER, branch_ok INTEGER, amount_ok INTEGER, expected TEXT, found TEXT, note TEXT)");
+        $c->exec("CREATE INDEX IF NOT EXISTS idx_lcacc_day ON lcup_accuracy(day)");
+        // superseded switches: Livewire read calls and the Tarix component are always on now (the whitelist is always enforced)
+        $c->exec("DELETE FROM settings WHERE key IN ('lcup.history_via_livewire', 'lcup.allow_switch_post', 'lcup.switch_url')");
 
         // screenshots are only demanded for transactions dated from the day this feature went live
         $c->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('proof_since', ?)")->execute([date('Y-m-d')]);
